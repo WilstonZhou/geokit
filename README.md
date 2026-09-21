@@ -3,6 +3,7 @@
 > 面向中文市场与 AI 搜索时代的开源 SEO / GEO 作战系统
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
+[![CI](https://github.com/WilstonZhou/geokit/actions/workflows/ci.yml/badge.svg)](https://github.com/WilstonZhou/geokit/actions/workflows/ci.yml)
 ![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
 ![Dependencies](https://img.shields.io/badge/direct%20deps-4-brightgreen)
 ![MCP](https://img.shields.io/badge/MCP-8%20tools-blue)

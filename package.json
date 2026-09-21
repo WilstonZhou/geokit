@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "鲸析 GEOkit — 面向中文市场与 AI 搜索时代的开源 SEO / GEO 作战系统",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WilstonZhou/geokit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/WilstonZhou/geokit/issues"
+  },
+  "homepage": "https://github.com/WilstonZhou/geokit#readme",
   "keywords": [
     "seo",
     "geo",
