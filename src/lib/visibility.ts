@@ -621,7 +621,25 @@ export async function runVisibilityMatrix(
   const probes = await Promise.all(
     PROVIDER_LIST.map((p) => probeProvider(p, brand, topic, keys[p.id]))
   );
+  return buildVisibilityReport(brand, topic, probes);
+}
 
+/**
+ * 从探针聚合成报告。**纯函数** —— 只依赖入参，不做任何 IO。
+ *
+ * 把它从 runVisibilityMatrix 里拆出来不是为了好看：
+ * 聚合口径（尤其是 visibilityScore 的分母）是整个 AI 观测里最容易出错、
+ * 也最难被发现的一处。被焊死在 async 函数里时它无法被离线验证 ——
+ * 想验证就必须真的去调九个模型。抽成纯函数后，给定一组构造好的探针，
+ * 任何口径都能在毫秒级内断言。
+ *
+ * 与 services/serp.ts 的 summarizeRankings 保持同一契约。
+ */
+export function buildVisibilityReport(
+  brand: string,
+  topic: string,
+  probes: VisibilityProbe[]
+): VisibilityReport {
   // 只有真正观测到的探针才能进分母。
   // 把「配置过 key 但被限流了」也算进分母，会让命中率看起来比真实情况好。
   const observed = probes.filter(
