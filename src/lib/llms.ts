@@ -9,6 +9,7 @@
  */
 
 import { stripTags, getTitle, getMeta, getCanonical, findTags, absolutize, getDomain } from "./html";
+import { fetchWithPolicy } from "./fetcher";
 
 export interface AiCrawler {
   /** robots.txt 里的 User-agent 值 */
@@ -154,20 +155,19 @@ export async function analyzeRobots(inputUrl: string): Promise<RobotsAnalysis> {
     };
   }
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 10_000);
   let txt: string | null = null;
   try {
-    const res = await fetch(robotsUrl, {
-      signal: ctrl.signal,
-      redirect: "follow",
+    const r = await fetchWithPolicy({
+      url: robotsUrl,
+      // 沿用原有超时与 UA，收敛只改机制不改参数
+      timeoutMs: 10_000,
       headers: { "User-Agent": "GEOkitBot/0.1 (+https://geokit.dev/bot)" },
+      purpose: "robots",
+      target: robotsUrl,
     });
-    if (res.ok) txt = await res.text();
+    if (r.ok) txt = r.body;
   } catch {
     // 抓取失败按「不存在」处理，但不谎称有
-  } finally {
-    clearTimeout(timer);
   }
 
   if (txt === null) {
@@ -284,20 +284,18 @@ export async function analyzeLlmsTxt(inputUrl: string): Promise<LlmsTxtAnalysis>
     /* 保持原样 */
   }
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 10_000);
   let txt: string | null = null;
   try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      redirect: "follow",
+    const r = await fetchWithPolicy({
+      url,
+      timeoutMs: 10_000,
       headers: { "User-Agent": "GEOkitBot/0.1 (+https://geokit.dev/bot)" },
+      purpose: "llms",
+      target: url,
     });
-    if (res.ok) txt = await res.text();
+    if (r.ok) txt = r.body;
   } catch {
     /* ignore */
-  } finally {
-    clearTimeout(timer);
   }
 
   if (txt === null) return emptyLlmsTxt(url);
@@ -404,30 +402,28 @@ export async function generateLlmsTxtDraft(
   const warnings: string[] = [];
   const base = siteUrl.startsWith("http") ? siteUrl : `https://${siteUrl}`;
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 15_000);
   let html = "";
-  try {
-    const res = await fetch(base, {
-      signal: ctrl.signal,
-      redirect: "follow",
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 GEOkitBot/0.1",
-      },
-    });
-    html = await res.text();
-  } catch (e) {
+  const grabbed = await fetchWithPolicy({
+    url: base,
+    timeoutMs: 15_000,
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 GEOkitBot/0.1",
+    },
+    purpose: "llms",
+    target: base,
+  });
+
+  // 精确复刻原行为：只有网络层失败（超时/连不上）才算失败返回；
+  // HTTP 非 2xx 时原逻辑仍会继续用返回体，这里保持一致。
+  if (!grabbed.ok && grabbed.error && grabbed.error.kind !== "http_error") {
     return {
-      content: `# ${opts.siteName ?? base}\n\n> 生成失败：无法抓取 ${base}（${
-        e instanceof Error ? e.message : String(e)
-      }）\n`,
+      content: `# ${opts.siteName ?? base}\n\n> 生成失败：无法抓取 ${base}（${grabbed.error.message}）\n`,
       sources: [],
       warnings: ["首页抓取失败，请确认站点可公网访问后再试。"],
     };
-  } finally {
-    clearTimeout(timer);
   }
+  html = grabbed.body;
 
   const siteName = opts.siteName ?? getTitle(html) ?? getDomain(base);
   const description =

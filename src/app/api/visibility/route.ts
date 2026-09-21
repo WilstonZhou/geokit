@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { runVisibilityMatrix, PROVIDER_LIST, type ProviderId } from "@/lib/visibility";
+import {
+  probeVisibility,
+  configuredProviders,
+  samplingProfile,
+} from "@/lib/services/visibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,15 +34,8 @@ export async function POST(req: Request) {
     );
   }
 
-  const keys: Partial<Record<ProviderId, string>> = {};
-  for (const p of PROVIDER_LIST) {
-    const v = process.env[p.envKey];
-    if (v) keys[p.id] = v;
-  }
-
   try {
-    const report = await runVisibilityMatrix(brand.trim(), topic.trim(), keys);
-    return NextResponse.json(report);
+    return NextResponse.json(await probeVisibility(brand, topic));
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : String(e) },
@@ -50,15 +47,9 @@ export async function POST(req: Request) {
 /** 返回当前已配置的模型清单，方便 UI 提示 */
 export async function GET() {
   return NextResponse.json({
-    providers: PROVIDER_LIST.map((p) => ({
-      id: p.id,
-      name: p.name,
-      vendor: p.vendor,
-      cnRelevance: p.cnRelevance,
-      note: p.note,
-      configured: Boolean(process.env[p.envKey]),
-      envKey: p.envKey,
-    })),
+    providers: configuredProviders(),
+    /** 本次观测使用的采样配置 —— 没有它，分数只是一个没有语境的数字 */
+    sampling: samplingProfile(),
     /** open-seo 仅支持这 4 个英文模型 —— 对比用 */
     openSeoSupported: ["chatgpt", "claude", "gemini", "perplexity"],
   });

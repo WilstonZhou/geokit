@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { fetchMultiEngine } from "@/lib/serp";
+import { searchRankings } from "@/lib/services/serp";
 import { CN_ENGINES, GLOBAL_ENGINES, ENGINE_LIST, isCnEngine, type EngineId } from "@/lib/engines";
 
 export const runtime = "nodejs";
@@ -8,6 +8,9 @@ export const dynamic = "force-dynamic";
 /**
  * POST /api/serp
  * { keyword, targetDomain?, engines?: EngineId[], group?: "cn" | "global" | "all", pages? }
+ *
+ * 本层只做参数校验与序列化 —— 聚合逻辑一律在 services/serp，
+ * 保证 MCP 与 HTTP 给出完全一致的口径。
  */
 export async function POST(req: Request) {
   let body: unknown;
@@ -29,34 +32,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "缺少 keyword" }, { status: 400 });
   }
 
-  let ids: EngineId[];
-  if (Array.isArray(engines) && engines.length > 0) {
-    ids = engines.filter((e) => ENGINE_LIST.some((x) => x.id === e));
-  } else {
-    ids = group === "cn" ? CN_ENGINES : group === "global" ? GLOBAL_ENGINES : [...CN_ENGINES, ...GLOBAL_ENGINES];
-  }
-
   try {
-    const results = await fetchMultiEngine(ids, keyword.trim(), targetDomain, Math.max(1, Math.min(pages, 3)));
-    const ok = results.filter((r) => r.status === "ok");
-    const ranked = ok.filter((r) => r.targetRank !== null);
-
-    return NextResponse.json({
-      keyword,
-      targetDomain: targetDomain ?? null,
-      engineCount: ids.length,
-      summary: {
-        okEngines: ok.length,
-        blockedEngines: results.filter((r) => r.status !== "ok").length,
-        /** 各引擎 Top10 中该域名的平均自然位次 */
-        averageRank: ranked.length
-          ? Math.round((ranked.reduce((s, r) => s + (r.targetRank ?? 0), 0) / ranked.length) * 10) / 10
-          : null,
-        bestRank: ranked.length ? Math.min(...ranked.map((r) => r.targetRank ?? 999)) : null,
-        totalItems: results.reduce((s, r) => s + r.items.length, 0),
-      },
-      results,
-    });
+    return NextResponse.json(
+      await searchRankings({ keyword, targetDomain, engines, group, pages })
+    );
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : String(e) },

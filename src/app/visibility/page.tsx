@@ -3,23 +3,36 @@
 import { useState } from "react";
 import { Card, SectionTitle, Badge, Stat, Field, inputCls, btnCls } from "@/components/ui";
 
+type ProbeStatus = "MENTIONED" | "NOT_MENTIONED" | "BLOCKED" | "ERROR" | "UNOBSERVABLE";
+
 interface Probe {
   provider: string; providerName: string; vendor: string;
-  status: "mentioned" | "not_mentioned" | "unconfigured" | "error";
+  status: ProbeStatus;
   mentioned: boolean; excerpt: string | null; citedDomains: string[];
+  requestedModel: string; servedModel: string | null;
+  promptVersion: string; parserVersion: string; confidence: string;
   note?: string; elapsedMs: number;
 }
 interface Report {
-  brand: string; prompt: string; probes: Probe[];
-  visibilityScore: number; configuredCount: number; mentionedCount: number;
-  topCitedDomains: { domain: string; count: number }[]; generatedAt: string;
+  brand: string; prompt: string; promptVersion: string; probes: Probe[];
+  visibilityScore: number;
+  observedCount: number; configuredCount: number; mentionedCount: number;
+  failedCount: number; unobservableCount: number;
+  topCitedDomains: { domain: string; count: number }[];
+  parserVersion: string; generatedAt: string;
 }
 
-const STATUS_TEXT: Record<Probe["status"], { text: string; tone: "good" | "warn" | "bad" | "neutral" }> = {
-  mentioned: { text: "已提及", tone: "good" },
-  not_mentioned: { text: "未提及", tone: "bad" },
-  unconfigured: { text: "未配置 Key", tone: "neutral" },
-  error: { text: "调用失败", tone: "warn" },
+/**
+ * 五态与后端一一对应。
+ * 刻意不把 BLOCKED / ERROR / UNOBSERVABLE 收合成一个「失败」——
+ * 「厂商限流拒绝」和「压根没配 key」的处置动作完全不同。
+ */
+const STATUS_TEXT: Record<ProbeStatus, { text: string; tone: "good" | "warn" | "bad" | "neutral" }> = {
+  MENTIONED: { text: "已提及", tone: "good" },
+  NOT_MENTIONED: { text: "未提及", tone: "bad" },
+  BLOCKED: { text: "厂商拒绝", tone: "warn" },
+  ERROR: { text: "调用失败", tone: "warn" },
+  UNOBSERVABLE: { text: "未观测", tone: "neutral" },
 };
 
 export default function VisibilityPage() {
@@ -147,10 +160,18 @@ export default function VisibilityPage() {
               label="可见性得分"
               value={data.configuredCount ? `${data.visibilityScore}%` : "—"}
               hint={data.configuredCount ? "已配置模型中的提及率" : "需要先配置至少一个 API key"}
-              tone={!data.configuredCount ? "default" : data.visibilityScore >= 50 ? "good" : "bad"}
+              tone={!data.observedCount ? "default" : data.visibilityScore >= 50 ? "good" : "bad"}
             />
-            <Stat label="提及该品牌" value={`${data.mentionedCount}/${data.configuredCount}`} />
-            <Stat label="参与探测" value={`${data.probes.length}`} hint="个模型，含未配置" />
+            <Stat
+              label="提及该品牌"
+              value={`${data.mentionedCount}/${data.observedCount}`}
+              hint="分子分母均为实际观测数"
+            />
+            <Stat
+              label="未能观测"
+              value={data.failedCount + data.unobservableCount}
+              hint="厂商拒绝 / 故障 / 未配置 Key，均不计入命中率"
+            />
             <Stat label="引用域名池" value={data.topCitedDomains.length} hint="多个模型共同引用即权威信源" />
           </div>
 
@@ -163,8 +184,8 @@ export default function VisibilityPage() {
                   <div
                     key={p.provider}
                     className={`rounded-lg border p-3.5 ${
-                      p.status === "mentioned" ? "border-emerald-200 bg-emerald-50/40"
-                        : p.status === "not_mentioned" ? "border-rose-200 bg-rose-50/40"
+                      p.status === "MENTIONED" ? "border-emerald-200 bg-emerald-50/40"
+                        : p.status === "NOT_MENTIONED" ? "border-rose-200 bg-rose-50/40"
                           : "border-ink-200 bg-white"
                     }`}
                   >
@@ -191,7 +212,11 @@ export default function VisibilityPage() {
                     {p.note && (
                       <p className="mt-2 text-[11.5px] leading-relaxed text-ink-500">{p.note}</p>
                     )}
-                    <p className="tabular mt-2 text-[10.5px] text-ink-400">{p.elapsedMs} ms</p>
+                    {/* 可复现性元数据：没有这些，这张卡上的结论无法被任何人复核 */}
+                    <p className="tabular mt-2 text-[10.5px] leading-relaxed text-ink-400">
+                      {p.elapsedMs} ms · {p.servedModel ?? p.requestedModel} · prompt v{p.promptVersion} ·{" "}
+                      {p.parserVersion} · confidence: {p.confidence}
+                    </p>
                   </div>
                 );
               })}

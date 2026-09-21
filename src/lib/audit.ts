@@ -12,6 +12,7 @@ import {
   findTags, stripTags, getTitle, getMeta, getAllMeta,
   getCanonical, getHeading, absolutize,
 } from "./html";
+import { fetchWithPolicy } from "./fetcher";
 
 export interface CheckResult {
   id: string;
@@ -85,32 +86,34 @@ const FETCH_TIMEOUT_MS = 15_000;
 export async function auditUrl(inputUrl: string): Promise<PageAudit> {
   const started = Date.now();
   const normalized = normalizeUrl(inputUrl);
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
 
   let html = "";
   let httpStatus = 0;
   let finalUrl = normalized;
 
-  try {
-    const res = await fetch(normalized, {
-      signal: ctrl.signal,
-      redirect: "follow",
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 GEOkitBot/0.1 (+https://geokit.dev/bot)",
-        Accept: "text/html,application/xhtml+xml,*/*;q=0.8",
-        "Accept-Language": "zh-CN,zh;q=0.9",
-      },
-    });
-    httpStatus = res.status;
-    finalUrl = res.url || normalized;
-    html = await res.text();
-  } catch (e) {
-    return emptyAudit(normalized, e instanceof Error ? e.message : String(e), Date.now() - started);
-  } finally {
-    clearTimeout(timer);
+  const grabbed = await fetchWithPolicy({
+    url: normalized,
+    timeoutMs: FETCH_TIMEOUT_MS,
+    followRedirect: true,
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 GEOkitBot/0.1 (+https://geokit.dev/bot)",
+      Accept: "text/html,application/xhtml+xml,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9",
+    },
+    purpose: "audit",
+    target: normalized,
+  });
+
+  // 原实现仅在 fetch 抛异常时走 emptyAudit —— 网络层失败才属此类，
+  // HTTP 非 2xx（如 404 页面）原本也会被继续 analyze，此处保持一致。
+  if (grabbed.body === "" && !grabbed.ok && grabbed.error && grabbed.error.kind !== "http_error") {
+    return emptyAudit(normalized, grabbed.error.message, Date.now() - started);
   }
+
+  httpStatus = grabbed.status;
+  finalUrl = grabbed.finalUrl || normalized;
+  html = grabbed.body;
 
   return analyze(finalUrl, html, httpStatus, Date.now() - started);
 }

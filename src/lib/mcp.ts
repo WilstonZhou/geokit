@@ -9,10 +9,18 @@
  */
 
 import { auditUrl } from "./audit";
-import { fetchMultiEngine } from "./serp";
 import { CN_ENGINES, GLOBAL_ENGINES, ENGINE_LIST, type EngineId } from "./engines";
-import { runVisibilityMatrix, PROVIDER_LIST, type ProviderId } from "./visibility";
 import { analyzeRobots, analyzeLlmsTxt, generateLlmsTxtDraft } from "./llms";
+/**
+ * Phase 0：工具实现不再直接调用采集层，一律走 services/*。
+ *
+ * 原因很实际：同一份 `check_serp_ranking`，人和 Agent 拿到的口径必须一致。
+ * 在 service 层之前，「选哪些引擎」「平均位次怎么算」「key 从哪来」
+ * 在 HTTP route 与 MCP handler 里各写了一份 —— 今天结果一致纯属巧合，
+ * 一旦某侧修改，Agent 的决策依据就会静默漂移，而没有任何测试会发现。
+ */
+import { searchRankings } from "./services/serp";
+import { probeVisibility, samplingProfile } from "./services/visibility";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
@@ -51,7 +59,9 @@ export const TOOLS: ToolDef[] = [
     name: "check_serp_ranking",
     title: "多引擎关键词排名查询",
     description:
-      "在指定搜索引擎中查询某个关键词的自然结果，并返回目标域名的真实排名位置。抓不到时会明确返回 blocked 状态并说明原因，绝不用模拟数据冒充排名。",
+      "在指定搜索引擎中查询某个关键词的自然结果，并返回目标域名的真实排名位置。" +
+      "抓不到时会明确返回 blocked 状态并说明原因，绝不用模拟数据冒充排名。" +
+      "引擎选择、翻页上限与平均位次口径与 HTTP API /api/serp 完全一致（同一份 service 实现）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -89,7 +99,10 @@ export const TOOLS: ToolDef[] = [
     name: "check_ai_visibility",
     title: "中文 AI 可见性探测",
     description:
-      "向 DeepSeek、豆包、Kimi、通义、文心、元宝、ChatGPT、Claude、Gemini 提问，检测指定品牌是否被提及。未配置对应 API key 的模型会返回 unconfigured 而不是假数据。",
+      "向 DeepSeek、豆包、Kimi、通义、文心、元宝、ChatGPT、Claude、Gemini 提问，检测指定品牌是否被提及。" +
+      "每个探针返回五种状态之一：MENTIONED / NOT_MENTIONED / BLOCKED / ERROR / UNOBSERVABLE —— " +
+      "未配置 API key 的模型返回 UNOBSERVABLE，被拒绝或故障的返回 BLOCKED/ERROR，一律不用假数据填充。" +
+      "visibilityScore 的分母只算真正观测成功的探针。",
     inputSchema: {
       type: "object",
       properties: {
@@ -169,30 +182,33 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       if (!keyword) throw new Error("缺少 keyword");
       const targetDomain = args.targetDomain ? String(args.targetDomain) : undefined;
       const list = Array.isArray(args.engines) ? (args.engines as EngineId[]) : undefined;
-      const group = (args.group as string) ?? (list ? "custom" : "cn");
-      let ids: EngineId[];
-      if (list && list.length) ids = list.filter((e) => ENGINE_LIST.some((x) => x.id === e));
-      else if (group === "global") ids = GLOBAL_ENGINES;
-      else if (group === "all") ids = [...CN_ENGINES, ...GLOBAL_ENGINES];
-      else ids = CN_ENGINES;
+      const group = (args.group as "cn" | "global" | "all") ?? "cn";
 
-      const results = await fetchMultiEngine(ids, keyword, targetDomain, Number(args.pages) || 1);
-      const ok = results.filter((r) => r.status === "ok");
-      const ranked = ok.filter((r) => r.targetRank !== null);
-      return {
+      // 选引擎、算平均位次、限制 pages 上限 —— 全部由 service 决定，
+      // MCP 不再自己实现第二份口径。
+      const r = await searchRankings({
         keyword,
-        engineCount: ids.length,
-        okEngines: ok.length,
-        averageRank: ranked.length
-          ? Math.round((ranked.reduce((s, r) => s + (r.targetRank ?? 0), 0) / ranked.length) * 10) / 10
-          : null,
+        targetDomain,
+        engines: list,
+        group,
+        pages: Number(args.pages) || 1,
+      });
+
+      return {
+        keyword: r.keyword,
+        targetDomain: r.targetDomain,
+        engineCount: r.engineCount,
+        // 以下两个字段为向后兼容保留，值与 summary 同源
+        okEngines: r.summary.okEngines,
+        averageRank: r.summary.averageRank,
+        summary: r.summary,
         note: "抓不到的引擎会返回 status=blocked 并说明原因，不使用模拟数据。",
-        results: results.map((r) => ({
-          engine: r.engineName,
-          status: r.status,
-          targetRank: r.targetRank,
-          note: r.note,
-          topResults: r.items.slice(0, 10).map((i) => ({
+        results: r.results.map((item) => ({
+          engine: item.engineName,
+          status: item.status,
+          targetRank: item.targetRank,
+          note: item.note,
+          topResults: item.items.slice(0, 10).map((i) => ({
             pos: i.position, title: i.title, url: i.url, domain: i.domain,
           })),
         })),
@@ -223,26 +239,46 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       const brand = String(args.brand ?? "").trim();
       const topic = String(args.topic ?? "").trim();
       if (!brand || !topic) throw new Error("缺少 brand 或 topic");
-      const keys: Partial<Record<ProviderId, string>> = {};
-      for (const p of PROVIDER_LIST) {
-        const v = process.env[p.envKey];
-        if (v) keys[p.id] = v;
-      }
-      const r = await runVisibilityMatrix(brand, topic, keys);
+      // key 的收集同样下沉到 service —— MCP 侧不再有自己的一份环境变量逻辑
+      const report = await probeVisibility(brand, topic);
       return {
-        brand: r.brand,
-        visibilityScore: r.visibilityScore,
-        configuredCount: r.configuredCount,
-        mentionedCount: r.mentionedCount,
-        topCitedDomains: r.topCitedDomains,
-        note: "open-seo 仅覆盖 ChatGPT/Claude/Gemini/Perplexity；GEOkit 额外覆盖 DeepSeek、豆包、Kimi、通义、文心、元宝。",
-        probes: r.probes.map((p) => ({
+        brand: report.brand,
+        visibilityScore: report.visibilityScore,
+        configuredCount: report.configuredCount,
+        mentionedCount: report.mentionedCount,
+        observedCount: report.observedCount,
+        failedCount: report.failedCount,
+        unobservableCount: report.unobservableCount,
+        topCitedDomains: report.topCitedDomains,
+        /**
+         * 可复现性上下文。没有它，Agent 拿到的分数无法判断可信边界：
+         * 同一个 60 分，在「9 个模型全观测成功」和「3 个成功 6 个失败」
+         * 两种情况下的含义完全不同。
+         */
+        sampling: {
+          // report 上的这三个值是本次观测实际生效的值；samplingProfile() 是全局默认
+          promptVersion: report.promptVersion,
+          requestParams: report.requestParams,
+          ...samplingProfile(),
+        },
+        note:
+          "visibilityScore 的分母是实际观测成功的探针数（observedCount），BLOCKED/ERROR/UNOBSERVABLE 不计入。" +
+          "open-seo 仅覆盖 ChatGPT/Claude/Gemini/Perplexity；GEOkit 额外覆盖 DeepSeek、豆包、Kimi、通义、文心、元宝。",
+        probes: report.probes.map((p) => ({
           provider: p.providerName,
           vendor: p.vendor,
           status: p.status,
           mentioned: p.mentioned,
           excerpt: p.excerpt,
           note: p.note,
+          confidence: p.confidence,
+          requestedModel: p.requestedModel,
+          servedModel: p.servedModel,
+          promptVersion: p.promptVersion,
+          parserVersion: p.parserVersion,
+          rawResponseChars: p.rawResponse?.length ?? 0,
+          unobservableReason: p.unobservableReason ?? null,
+          elapsedMs: p.elapsedMs,
         })),
       };
     }

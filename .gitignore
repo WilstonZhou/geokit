@@ -38,3 +38,7 @@ coverage/
 .cache/
 .temp/
 tmp/
+
+# Phase 0 新增：Evidence 落盘目录（GEOKIT_EVIDENCE=on 时生成）
+# 原始采集数据可能包含第三方页面正文，不进版本库
+.evidence/

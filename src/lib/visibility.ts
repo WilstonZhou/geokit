@@ -8,9 +8,31 @@
  * 这六个模型，open-seo 一个都不覆盖 —— 这就是 GEOkit 的核心战场。
  *
  * 设计原则同 serp.ts：
- *   没有配 API key 就明确返回 status: "unconfigured"，
+ *   没有配 API key 就明确返回 UNOBSERVABLE，
  *   绝不用随机数据假装「你的品牌被 AI 提到了」。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * Phase 0 修订：可复现性
+ * ─────────────────────────────────────────────────────────────
+ * 修订前存在三个硬伤，使 AI 观测无法作为事实使用：
+ *   1. temperature 只在 OpenAI 兼容路径设为 0.2，Claude / Gemini 路径
+ *      完全不设（即沿用各家服务端默认值）。同一 prompt 在九个模型上
+ *      不是同一场实验，横向对比不成立。
+ *   2. 原始回答直接丢弃，只存 400 字片段 —— 结论无法复核。
+ *   3. prompt 没有版本，LLM 判决与「我们当时究竟问了什么」对不上。
+ *
+ * 修订后可复现性四件套全部落盘:
+ *   requestedModel / servedModel / requestParams / promptVersion
+ *   + promptHash / parserVersion / rawResponse / evidenceId
  */
+
+import { createHash } from "node:crypto";
+
+import { fetchWithPolicy, type FetchPurpose, type FetchResult } from "./fetcher";
+import type { AiObservationStatus, Confidence } from "./evidence/types";
+import { recordFetch } from "./evidence/store";
+
+const AI_TIMEOUT_MS = 30_000;
 
 export type ProviderId =
   | "deepseek"
@@ -142,38 +164,137 @@ export const PROVIDERS: Record<ProviderId, AiProvider> = {
 export const PROVIDER_LIST = Object.values(PROVIDERS);
 export const CN_PROVIDERS: ProviderId[] = ["deepseek", "doubao", "kimi", "qwen", "wenxin", "yuanbao"];
 
-export type ProbeStatus = "mentioned" | "not_mentioned" | "unconfigured" | "error";
+/**
+ * 五态 —— 与 evidence/types 的 AiObservationStatus 同构。
+ *
+ * 修订前只有 mentioned / not_mentioned / unconfigured / error 四态，
+ * 造成两处混淆：
+ *   · 「模型拒绝了我」(401/403/429) 和「网络挂了」(timeout) 都叫 error，
+ *     但前者是配额/授权问题、后者是环境问题，处置方式完全不同。
+ *   · unconfigured 单列，而它本质上就是「无法观测」的一种。
+ *
+ * 统一为五态后，每一个结论都能回答：观测到了吗？还是压根没观测？
+ */
+export type ProbeStatus = AiObservationStatus;
+
+export type UnobservableReason =
+  | "missing_api_key"
+  | "unsupported_protocol"
+  | "no_response_body"
+  | "unparsable_response";
 
 export interface VisibilityProbe {
   provider: ProviderId;
   providerName: string;
   vendor: string;
+
+  /** 五态结论。**只有 MENTIONED / NOT_MENTIONED 才代表真的观测到了** */
   status: ProbeStatus;
-  /** 是否提及品牌 —— 仅在配置且有结果时才有意义 */
+
+  /** 是否提及品牌 —— 仅在 status 为 MENTIONED / NOT_MENTIONED 时有意义 */
   mentioned: boolean;
-  /** 提及时的上下文片段 */
+
+  /** 提及时的上下文片段（给 UI 展示用的截断版本） */
   excerpt: string | null;
+
+  /** ★ 原始回答全文 —— 不做任何裁剪，用于事后复核与重放 */
+  rawResponse: string | null;
+
   /** 回复中引用到的域名 */
   citedDomains: string[];
+
   note?: string;
+
+  /** ── 可复现性元数据 ───────────────────────────────── */
+
+  /** 请求时指定的模型标识 */
+  requestedModel: string;
+  /** 服务端实际使用的模型标识（常带版本号，可能与请求值不同） */
+  servedModel: string | null;
+  /** 实际发送出去的采样参数 —— 记录真相，而不是记录意图 */
+  requestParams: Record<string, number | string | boolean>;
+  /** 使用的 prompt 版本。文本一改就必须 +1 */
+  promptVersion: string;
+  /** prompt 指纹，防止同名版本下悄悄改了措辞 */
+  promptHash: string;
+  /** 从原始响应得出结论的解析器版本 */
+  parserVersion: string;
+
+  /** 置信度。AI 观测恒为 medium —— 见 buildObservedProbe 的注释 */
+  confidence: Confidence;
+  /** 必须说明的保留意见 */
+  caveat?: string;
+
+  /** 本次观测对应的原始素材 id；Evidence 未开启时为 null */
+  evidenceId: string | null;
+
+  /** 无法观测时的具体原因 */
+  unobservableReason?: UnobservableReason;
+
   elapsedMs: number;
 }
 
 export interface VisibilityReport {
   brand: string;
   prompt: string;
+  promptVersion: string;
   probes: VisibilityProbe[];
-  /** 命中率：仅在已配置的探针中统计 */
+  /**
+   * 命中率分母是**实际观测到的探针数**，不是配置了 key 的探针数。
+   * BLOCKED / ERROR / UNOBSERVABLE 一律不计入 —— 没观测到的东西
+   * 不能既不算分子也不算分母地「稀释」比率，那会让数字看起来比真实情况好。
+   */
   visibilityScore: number;
+  /** 实际完成观测的探针数（= MENTIONED + NOT_MENTIONED） */
+  observedCount: number;
+  /** 配置了 key 的探针数（含未能成功观测的） */
   configuredCount: number;
   mentionedCount: number;
+  /** 因拒绝 / 故障而未能观测的探针数 */
+  failedCount: number;
+  /** 未配置 key 的探针数 */
+  unobservableCount: number;
   /** 被多个模型共同引用的域名 —— 这是值得投放的“权威信源池” */
   topCitedDomains: { domain: string; count: number }[];
+  parserVersion: string;
+  requestParams: Record<string, number | string | boolean>;
   generatedAt: string;
 }
 
+/**
+ * Prompt 版本。文本内容一旦改动必须 +1，
+ * 否则「两个月前的观测」和「今天的观测」无从比较。
+ */
+export const PROMPT_TEMPLATE_VERSION = "1.0.0";
+
+/** 从原始响应抽取结论的解析器版本 */
+export const AI_VISIBILITY_PARSER_VERSION = "ai-visibility@0.1.0";
+
+/**
+ * 统一采样参数。
+ *
+ * 为什么是 temperature = 0：AI 可见性观测要的是「模型在当前知识下会不会
+ * 提到这个品牌」，不是要它即兴发挥。多样性在这里是噪声。
+ *
+ * 为什么不带 top_p：Anthropic 的 Messages API 会在 temperature 与 top_p
+ * 同时指定时直接报错。为了九个位点上真正统一，只发一个采样参数。
+ */
+export const SAMPLING_PROFILE = {
+  temperature: 0,
+  maxTokens: 1024,
+} as const;
+
 const PROMPT_TEMPLATE = (brand: string, topic: string) =>
   `请用中文回答：${topic}。如果你了解相关厂商或服务，请列出你知道的名字并简要说明。`;
+
+function promptHash(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex").slice(0, 16);
+}
+
+function buildPrompt(brand: string, topic: string): { text: string; version: string; hash: string } {
+  const text = PROMPT_TEMPLATE(brand, topic);
+  return { text, version: PROMPT_TEMPLATE_VERSION, hash: promptHash(text) };
+}
 
 /**
  * 单次探测。真实调用需要对应厂商的 API key。
@@ -186,108 +307,296 @@ export async function probeProvider(
   apiKey?: string
 ): Promise<VisibilityProbe> {
   const started = Date.now();
+  const prompt = buildPrompt(brand, topic);
+
   const base: VisibilityProbe = {
     provider: provider.id,
     providerName: provider.name,
     vendor: provider.vendor,
-    status: "unconfigured",
+    status: "UNOBSERVABLE",
     mentioned: false,
     excerpt: null,
+    rawResponse: null,
     citedDomains: [],
-    note: `未配置 ${provider.envKey}，跳过真实调用。GEOkit 不会用模拟数据冒充分析结果。`,
+    requestedModel: provider.apiModel,
+    servedModel: null,
+    requestParams: { ...SAMPLING_PROFILE },
+    promptVersion: prompt.version,
+    promptHash: prompt.hash,
+    parserVersion: AI_VISIBILITY_PARSER_VERSION,
+    confidence: "unavailable",
+    evidenceId: null,
     elapsedMs: 0,
   };
 
-  if (!apiKey) return { ...base, elapsedMs: Date.now() - started };
-
-  try {
-    const answer = await callProvider(provider, apiKey, PROMPT_TEMPLATE(brand, topic));
-    const mentioned = answer.toLowerCase().includes(brand.toLowerCase());
+  // ① 没有 key —— 明确「没能观测」，而不是「观测了但没提及」
+  if (!apiKey) {
     return {
       ...base,
-      status: mentioned ? "mentioned" : "not_mentioned",
-      mentioned,
-      excerpt: answer.slice(0, 400),
-      citedDomains: extractDomains(answer),
-      note: mentioned
-        ? undefined
-        : "未提及该品牌。可考虑增加结构化数据、权威引用与可被摘取的结论段。",
-      elapsedMs: Date.now() - started,
-    };
-  } catch (e) {
-    return {
-      ...base,
-      status: "error",
-      note: `调用失败：${e instanceof Error ? e.message : String(e)}`,
+      unobservableReason: "missing_api_key",
+      note: `未配置 ${provider.envKey}，跳过真实调用。GEOkit 不会用模拟数据冒充分析结果。`,
       elapsedMs: Date.now() - started,
     };
   }
+
+  let res: FetchResult;
+  let evidenceId: string | null = null;
+
+  try {
+    const { result, evidence } = await recordFetch(
+      () => callProvider(provider, apiKey, prompt.text),
+      "llm_response"
+    );
+    res = result;
+    evidenceId = evidence?.id ?? null;
+  } catch (e) {
+    // 协议不支持 —— 不是调用失败，是我们还没有这个观测能力
+    return {
+      ...base,
+      unobservableReason: "unsupported_protocol",
+      note: e instanceof Error ? e.message : String(e),
+      elapsedMs: Date.now() - started,
+    };
+  }
+
+  const elapsedMs = Date.now() - started;
+
+  // ② 网络 / 超时：Fetcher 没能拿到任何响应
+  if (!res.ok && res.status === 0) {
+    return {
+      ...base,
+      status: "ERROR",
+      evidenceId,
+      note: `请求失败（${res.error?.kind ?? "unknown"}）：${res.error?.message ?? "未知错误"}`,
+      elapsedMs,
+    };
+  }
+
+  // ③ 服务端明确拒绝：401/403 鉴权、402 欠费、429 限流
+  //    这一类具备明确的处置方式，必须与「未知错误」区分
+  if (!res.ok && BLOCKED_STATUSES.has(res.status)) {
+    return {
+      ...base,
+      status: "BLOCKED",
+      evidenceId,
+      note: `模型厂商拒绝请求（HTTP ${res.status}）：${BLOCKED_STATUSES.get(res.status)}`,
+      elapsedMs,
+    };
+  }
+
+  // ④ 其他非 2xx
+  if (!res.ok) {
+    return {
+      ...base,
+      status: "ERROR",
+      evidenceId,
+      note: `调用失败：HTTP ${res.status}`,
+      elapsedMs,
+    };
+  }
+
+  const parsed = parseAnswer(provider, res);
+
+  // ⑤ HTTP 200 但拿不到可解读的回答 —— 依旧是「没观测到」
+  if (!parsed.ok) {
+    return {
+      ...base,
+      status: "UNOBSERVABLE",
+      evidenceId,
+      unobservableReason: parsed.reason,
+      servedModel: parsed.servedModel,
+      note: parsed.reason === "unparsable_response"
+        ? "模型返回的不是可解析的 JSON，无法判定是否提及。"
+        : "模型未返回任何文本内容，无法判定是否提及。",
+      elapsedMs,
+    };
+  }
+
+  return buildObservedProbe({
+    base,
+    text: parsed.text,
+    servedModel: parsed.servedModel,
+    evidenceId,
+    brand,
+    elapsedMs,
+  });
 }
 
-async function callProvider(p: AiProvider, key: string, prompt: string): Promise<string> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30_000);
-  try {
-    if (p.openAiCompatible) {
-      const res = await fetch(p.baseUrl, {
-        method: "POST",
-        signal: ctrl.signal,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${key}`,
-        },
-        body: JSON.stringify({
-          model: p.apiModel,
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0.2,
-        }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = (await res.json()) as {
-        choices?: { message?: { content?: string } }[];
-      };
-      return json.choices?.[0]?.message?.content ?? "";
-    }
+/** 各厂商明确「拒绝」的 HTTP 状态码及其处置含义 */
+const BLOCKED_STATUSES = new Map<number, string>([
+  [401, "API Key 无效或已过期"],
+  [402, "账户余额不足"],
+  [403, "无该模型访问权限"],
+  [429, "触发限流，需降低采样频率"],
+]);
 
-    if (p.id === "claude") {
-      const res = await fetch(p.baseUrl, {
-        method: "POST",
-        signal: ctrl.signal,
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": key,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: p.apiModel,
-          max_tokens: 1024,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = (await res.json()) as { content?: { text?: string }[] };
-      return json.content?.[0]?.text ?? "";
-    }
+/**
+ * 构造已成功观测的探针。
+ *
+ * 关于 confidence 恒为 medium —— 这是刻意的：
+ *   即使 temperature=0，也没有任何厂商承诺逐字节一致；
+ *   单次探测本质是 N=1 的采样，不具备统计意义。
+ * 若这里标 high，等于宣称「模型此刻没提到你 = 它永远不会提到你」，
+ * 那正是本项目最反对的那种伪装。
+ */
+function buildObservedProbe(args: {
+  base: VisibilityProbe;
+  text: string;
+  servedModel: string | null;
+  evidenceId: string | null;
+  brand: string;
+  elapsedMs: number;
+}): VisibilityProbe {
+  const { base, text, servedModel, evidenceId, brand, elapsedMs } = args;
+  const mentioned = brand.length > 0 && text.toLowerCase().includes(brand.toLowerCase());
 
-    if (p.id === "gemini") {
-      const url = `${p.baseUrl}/${p.apiModel}:generateContent?key=${key}`;
-      const res = await fetch(url, {
-        method: "POST",
-        signal: ctrl.signal,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = (await res.json()) as {
-        candidates?: { content?: { parts?: { text?: string }[] } }[];
-      };
-      return json.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-    }
+  return {
+    ...base,
+    status: mentioned ? "MENTIONED" : "NOT_MENTIONED",
+    mentioned,
+    excerpt: text.slice(0, 400),
+    rawResponse: text,
+    citedDomains: extractDomains(text),
+    servedModel,
+    evidenceId,
+    confidence: "medium",
+    caveat: "单次采样（N=1）且厂商不承诺确定性输出，应作为趋势样本而非结论使用。",
+    note: mentioned
+      ? undefined
+      : "未提及该品牌。可考虑增加结构化数据、权威引用与可被摘取的结论段。",
+    elapsedMs,
+  };
+}
 
-    throw new Error(`暂不支持的协议：${p.name}（将在后续版本接入）`);
-  } finally {
-    clearTimeout(timer);
+/**
+ * 调用模型并**原样返回 FetchResult**。
+ *
+ * 判定 HTTP 状态码、决定是否重试、如何解释结果 —— 全部不在这一层，
+ * 由 probeProvider 负责。callProvider 只回答「这次请求发生了什么」。
+ */
+async function callProvider(p: AiProvider, key: string, prompt: string): Promise<FetchResult> {
+  const common = {
+    method: "POST" as const,
+    timeoutMs: AI_TIMEOUT_MS,
+    purpose: "ai-visibility" as FetchPurpose,
+    target: p.id,
+    meta: { providerId: p.id, requestedModel: p.apiModel },
+    // AI 厂商侧有各自的配额控制；本项目不做额外限速，也不重试 —— 重试
+    // 会把一次配额消耗放大成 N 次，且你无法从结果里看出来。
+    rateLimit: false as const,
+    maxAttempts: 1,
+  };
+
+  if (p.openAiCompatible) {
+    return fetchWithPolicy({
+      ...common,
+      url: p.baseUrl,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model: p.apiModel,
+        messages: [{ role: "user", content: prompt }],
+        temperature: SAMPLING_PROFILE.temperature,
+        max_tokens: SAMPLING_PROFILE.maxTokens,
+      }),
+    });
   }
+
+  if (p.id === "claude") {
+    return fetchWithPolicy({
+      ...common,
+      url: p.baseUrl,
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+      },
+      // 注意：Anthropic 在 temperature 与 top_p 同时出现时会报错，故只发前者
+      body: JSON.stringify({
+        model: p.apiModel,
+        max_tokens: SAMPLING_PROFILE.maxTokens,
+        temperature: SAMPLING_PROFILE.temperature,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+  }
+
+  if (p.id === "gemini") {
+    // ⚠️ 历史实现把 key 拼在 URL 的 `?key=` 里。key 会进入 Evidence 的
+    // requestUrl 字段，等于把凭据写进磁盘。改走 x-goog-api-key 头：
+    // Gemini 官方支持，且请求头脱敏本就在契约覆盖范围内。
+    return fetchWithPolicy({
+      ...common,
+      url: `${p.baseUrl}/${p.apiModel}:generateContent`,
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": key,
+      },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: SAMPLING_PROFILE.temperature,
+          maxOutputTokens: SAMPLING_PROFILE.maxTokens,
+        },
+      }),
+    });
+  }
+
+  throw new Error(`暂不支持的协议：${p.name}（将在后续版本接入）`);
+}
+
+/**
+ * 从原始响应抽取回答文本与实际模型版本。
+ *
+ * 不做任何业务判定 —— 「有没有提到品牌」是 probeProvider 的事。
+ * 这里出了问题一律返回 ok:false 交由上层标 UNOBSERVABLE，
+ * 而不是抛异常让上层笼统地记为 ERROR。
+ */
+function parseAnswer(
+  p: AiProvider,
+  res: FetchResult
+): { ok: true; text: string; servedModel: string | null } | { ok: false; reason: UnobservableReason; servedModel: null } {
+  if (!res.body) return { ok: false, reason: "no_response_body", servedModel: null };
+
+  let json: unknown;
+  try {
+    json = JSON.parse(res.body);
+  } catch {
+    return { ok: false, reason: "unparsable_response", servedModel: null };
+  }
+
+  const obj = json as Record<string, unknown>;
+  const textOf = (v: unknown): string => (typeof v === "string" ? v : "");
+  const modelOf = (): string | null => {
+    const m = obj.model ?? obj.modelVersion ?? obj.model_name;
+    return typeof m === "string" ? m : null;
+  };
+
+  if (p.openAiCompatible) {
+    const choices = obj.choices as { message?: { content?: unknown } }[] | undefined;
+    return { ok: true, text: textOf(choices?.[0]?.message?.content), servedModel: modelOf() };
+  }
+
+  if (p.id === "claude") {
+    const content = obj.content as { type?: string; text?: unknown }[] | undefined;
+    const first = Array.isArray(content) ? content.find((c) => c?.type === "text") : undefined;
+    return { ok: true, text: textOf(first?.text), servedModel: modelOf() };
+  }
+
+  if (p.id === "gemini") {
+    const candidates = obj.candidates as
+      | { content?: { parts?: { text?: unknown }[] } }[]
+      | undefined;
+    return {
+      ok: true,
+      text: textOf(candidates?.[0]?.content?.parts?.[0]?.text),
+      servedModel: modelOf(),
+    };
+  }
+
+  return { ok: false, reason: "unparsable_response", servedModel: null };
 }
 
 function extractDomains(text: string): string[] {
@@ -313,8 +622,15 @@ export async function runVisibilityMatrix(
     PROVIDER_LIST.map((p) => probeProvider(p, brand, topic, keys[p.id]))
   );
 
-  const configured = probes.filter((p) => p.status !== "unconfigured");
-  const mentioned = probes.filter((p) => p.mentioned);
+  // 只有真正观测到的探针才能进分母。
+  // 把「配置过 key 但被限流了」也算进分母，会让命中率看起来比真实情况好。
+  const observed = probes.filter(
+    (p) => p.status === "MENTIONED" || p.status === "NOT_MENTIONED"
+  );
+  const mentioned = probes.filter((p) => p.status === "MENTIONED");
+  const failed = probes.filter((p) => p.status === "BLOCKED" || p.status === "ERROR");
+  const unobservable = probes.filter((p) => p.status === "UNOBSERVABLE");
+  const configuredCount = probes.length - unobservable.length;
 
   const domainCount = new Map<string, number>();
   for (const p of probes) {
@@ -327,17 +643,25 @@ export async function runVisibilityMatrix(
     .sort((a, b) => b.count - a.count)
     .slice(0, 10);
 
+  const prompt = buildPrompt(brand, topic);
+
   return {
     brand,
-    prompt: PROMPT_TEMPLATE(brand, topic),
+    prompt: prompt.text,
+    promptVersion: prompt.version,
     probes,
     visibilityScore:
-      configured.length === 0
+      observed.length === 0
         ? 0
-        : Math.round((mentioned.length / configured.length) * 100),
-    configuredCount: configured.length,
+        : Math.round((mentioned.length / observed.length) * 100),
+    observedCount: observed.length,
+    configuredCount,
     mentionedCount: mentioned.length,
+    failedCount: failed.length,
+    unobservableCount: unobservable.length,
     topCitedDomains,
+    parserVersion: AI_VISIBILITY_PARSER_VERSION,
+    requestParams: { ...SAMPLING_PROFILE },
     generatedAt: new Date().toISOString(),
   };
 }

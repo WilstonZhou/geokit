@@ -11,6 +11,7 @@
 
 import { ENGINES, type EngineId, type SearchEngine } from "./engines";
 import { findTags, stripTags, getDomain, decodeEntities, absolutize } from "./html";
+import { fetchWithPolicy } from "./fetcher";
 
 export type SerpStatus = "ok" | "blocked" | "no_results" | "error";
 
@@ -50,24 +51,25 @@ export interface SerpResponse {
 const FETCH_TIMEOUT_MS = 12_000;
 
 async function fetchHtml(url: string, engine: SearchEngine): Promise<string> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      redirect: "follow",
-      headers: {
-        "User-Agent": engine.userAgent,
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-      },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.text();
-  } finally {
-    clearTimeout(timer);
-  }
+  const r = await fetchWithPolicy({
+    url,
+    timeoutMs: FETCH_TIMEOUT_MS,
+    followRedirect: true,
+    headers: {
+      "User-Agent": engine.userAgent,
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    },
+    purpose: "serp",
+    target: engine.id,
+    meta: { engineId: engine.id },
+    // 启用 per-domain 限速（默认策略）。五个引擎域名互不相同，桶各自独立，
+    // 单次并发请求不受影响；只有对同一引擎连续高频请求才会被节流。
+  });
+
+  // 与历史实现完全一致：非 2xx 抛错，由 fetchSerp 捕获后返回 blocked
+  if (!r.ok) throw new Error(r.error?.kind === "http_error" ? `HTTP ${r.status}` : (r.error?.message ?? "请求失败"));
+  return r.body;
 }
 
 /** 单容器允许的最大内容长度，超过说明标签嵌套被错配 */
@@ -238,28 +240,19 @@ function isRedirectWrapper(absolute: string, engineDomain: string, rawHref: stri
  * 中转包得再深，最终也会 302 到真实站点 —— 这是唯一可靠的方法。
  */
 async function resolveFinalUrl(target: string, ua: string): Promise<string | null> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REDIRECT_TIMEOUT_MS);
-  try {
-    const res = await fetch(target, {
-      method: "GET",
-      redirect: "follow",
-      signal: ctrl.signal,
-      headers: { "User-Agent": ua, Accept: "*/*" },
-    });
-    // 不读 body，避免额外流量
-    try {
-      await res.body?.cancel();
-    } catch {
-      /* 已取消读取 */
-    }
-    const finalUrl = (res as { url?: string }).url;
-    return finalUrl || null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  const r = await fetchWithPolicy({
+    url: target,
+    method: "GET",
+    followRedirect: true,
+    // 只在乎最终落到哪个域名，不读响应体 —— 沿用历史的省流量做法
+    readBody: false,
+    timeoutMs: REDIRECT_TIMEOUT_MS,
+    headers: { "User-Agent": ua, Accept: "*/*" },
+    purpose: "resolve-redirect",
+    target,
+  });
+  if (!r.finalUrl) return null;
+  return r.finalUrl || null;
 }
 
 /** 有限并发地批量解析 */
