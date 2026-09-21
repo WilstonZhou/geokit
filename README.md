@@ -2,8 +2,9 @@
 
 > 面向中文市场与 AI 搜索时代的开源 SEO / GEO 作战系统
 
-![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
 [![CI](https://github.com/WilstonZhou/geokit/actions/workflows/ci.yml/badge.svg)](https://github.com/WilstonZhou/geokit/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/WilstonZhou/geokit?label=release)](https://github.com/WilstonZhou/geokit/releases)
+![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
 ![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
 ![Dependencies](https://img.shields.io/badge/direct%20deps-4-brightgreen)
 ![MCP](https://img.shields.io/badge/MCP-8%20tools-blue)
@@ -52,7 +53,7 @@ open-seo 是个好项目 —— 28 万行代码、自研站点审计爬虫、完
 <table>
 <tr>
 <td width="50%"><b>多引擎关键词排名</b><br>中文引擎真实位次，摘要为可直接阅读的正文（下图为「跨境支付平台」实采）</td>
-<td width="50%"><b>页面审计与 GEO 评分</b><br>六维 AI 引用友好度拆解 + 37 项技术检查明细</td>
+<td width="50%"><b>页面审计与 GEO 评分</b><br>六维 AI 引用友好度拆解 + 11 项技术检查明细</td>
 </tr>
 <tr>
 <td><img src="docs/screenshots/02-serp.png" alt="多引擎关键词排名"></td>
