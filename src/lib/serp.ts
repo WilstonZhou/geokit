@@ -86,7 +86,12 @@ const RESOLVE_TOP_N = 10;
  * 「搜索引擎自身」直接丢弃，导致大量真实结果被误杀。现在改为：先据实保留，
  * 再异步解析真实目标，并把无法实现的情况标记为 redirectWrapper，不假装知道答案。
  */
-function extractItems(html: string, engine: SearchEngine, baseUrl: string): Partial<SerpResultItem>[] {
+/**
+ * Phase 0：导出以便离线回归。
+ * 该函数本身未作任何修改 —— 导出目的是让三个筐子的特殊解析
+ * 能被 fixture 直接喂进去做 regression，不依赖实时网络。
+ */
+export function extractItems(html: string, engine: SearchEngine, baseUrl: string): Partial<SerpResultItem>[] {
   const raw: Partial<SerpResultItem>[] = [];
   const containers = selectContainers(html, engine);
 

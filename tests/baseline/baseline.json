@@ -1,0 +1,131 @@
+{
+  "generatedAt": "2026-09-21T15:45:42.873Z",
+  "serp": {
+    "baidu": {
+      "engineId": "baidu",
+      "count": 21,
+      "resolvedCount": 4,
+      "wrapperCount": 17,
+      "domains": [
+        "baidu.com",
+        "baidu.com",
+        "baidu.com",
+        "baidu.com",
+        "lianlianpay.com",
+        "baidu.com",
+        "baidu.com",
+        "baidu.com",
+        "baidu.com",
+        "airwallex.com",
+        "baidu.com",
+        "lianlianpay.com",
+        "baidu.com",
+        "baidu.com",
+        "baidu.com",
+        "paypal.com",
+        "baidu.com",
+        "baidu.com",
+        "baidu.com",
+        "baidu.com",
+        "baidu.com"
+      ],
+      "firstTitles": [
+        "跨境 平台收款-PingPong 跨境 电商收款 官网入口",
+        "跨境支付 (两个或者两个以上国家... - 百度百科",
+        "跨境支付 的最新相关信息",
+        "〔支持D0结算〕 支付 平台-稳定通道-欢迎所有行业入驻",
+        "连连 跨境支付 - 连连(LianLian Global)"
+      ],
+      "malformedDomains": []
+    },
+    "so360": {
+      "engineId": "so360",
+      "count": 4,
+      "resolvedCount": 4,
+      "wrapperCount": 0,
+      "domains": [
+        "useepay.com",
+        "163.com",
+        "cifnews.com",
+        "lianlianpay.com"
+      ],
+      "firstTitles": [
+        "UseePay官方, 一站式 跨境支付 平台-安全可靠的跨境收款方案",
+        "网易 跨境 收款 专注服务 跨境 电商卖家 - 网易 支付 官网",
+        "第三方 跨境支付 _第三方 跨境支付 平台_跨境第三方支付-雨果跨境",
+        "全球 跨境 收 付款 平台_出口外贸B2B收款_全球收单_国际贸易 支付 收款首"
+      ],
+      "malformedDomains": []
+    },
+    "sogou": {
+      "engineId": "sogou",
+      "count": 9,
+      "resolvedCount": 8,
+      "wrapperCount": 1,
+      "domains": [
+        "sogou.com",
+        "zhihu.com",
+        "cifnews.com",
+        "csdn.net",
+        "qq.com",
+        "eastmoney.com",
+        "toutiao.com",
+        "eservicesgroup.com.cn",
+        "qq.com"
+      ],
+      "firstTitles": [
+        "全球 跨境 收 付款 平台_出口外贸B2B收款_全球收单_国际贸易 支付 收款.",
+        "跨境支付 是什么?_知乎",
+        "跨境支付 是什么意思-雨果网",
+        "03 跨境支付 _ 跨境支付 业务-CSDN博客",
+        "人民币跨境支付，新消息"
+      ],
+      "malformedDomains": []
+    }
+  },
+  "audit": {
+    "seoScore": 91,
+    "geoScore": 70,
+    "checkCount": 11,
+    "checkIds": [
+      "http",
+      "title",
+      "desc",
+      "canonical",
+      "robots",
+      "h1",
+      "alt",
+      "viewport",
+      "lang",
+      "jsonld",
+      "og"
+    ],
+    "checkLevels": [
+      "http:pass",
+      "title:pass",
+      "desc:warn",
+      "canonical:pass",
+      "robots:pass",
+      "h1:pass",
+      "alt:pass",
+      "viewport:warn",
+      "lang:pass",
+      "jsonld:pass",
+      "og:pass"
+    ],
+    "geoBreakdown": [
+      "可引用性=20/25",
+      "结构化=14/20",
+      "实体清晰度=11/15",
+      "可抓取性=15/15",
+      "事实密度=3/15",
+      "可读性/时效=7/10"
+    ],
+    "jsonLdTypes": [
+      "Article",
+      "Person"
+    ],
+    "titleLength": 15,
+    "wordCount": 77
+  }
+}

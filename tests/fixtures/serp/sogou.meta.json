@@ -1,0 +1,11 @@
+{
+  "engineId": "sogou",
+  "label": "搜狗（依赖 citeLinkClass 展示文本）",
+  "keyword": "跨境支付",
+  "url": "https://www.sogou.com/web?query=%E8%B7%A8%E5%A2%83%E6%94%AF%E4%BB%98",
+  "httpStatus": 200,
+  "byteLength": 578820,
+  "elapsedMs": 1037,
+  "capturedAt": "2026-09-21T15:43:23.308Z",
+  "featureMarkerCount": 15
+}

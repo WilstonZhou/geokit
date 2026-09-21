@@ -1,0 +1,11 @@
+{
+  "engineId": "so360",
+  "label": "360（依赖 data-mdurl 属性）",
+  "keyword": "跨境支付",
+  "url": "https://www.so.com/s?q=%E8%B7%A8%E5%A2%83%E6%94%AF%E4%BB%98",
+  "httpStatus": 200,
+  "byteLength": 544999,
+  "elapsedMs": 593,
+  "capturedAt": "2026-09-21T15:43:22.262Z",
+  "featureMarkerCount": 9
+}

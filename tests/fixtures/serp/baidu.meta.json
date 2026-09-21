@@ -1,0 +1,11 @@
+{
+  "engineId": "baidu",
+  "label": "百度（依赖 mu 属性取真实 URL）",
+  "keyword": "跨境支付",
+  "url": "https://www.baidu.com/s?wd=%E8%B7%A8%E5%A2%83%E6%94%AF%E4%BB%98&rn=20",
+  "httpStatus": 200,
+  "byteLength": 1687276,
+  "elapsedMs": 1465,
+  "capturedAt": "2026-09-21T15:43:21.663Z",
+  "featureMarkerCount": 22
+}
