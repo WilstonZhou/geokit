@@ -1,0 +1,13 @@
+# 统一行尾，避免 Windows / Linux 贡献者互相污染 diff
+* text=auto eol=lf
+
+# 二进制不参与转换与 diff
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg text eol=lf
+
+# 锁定文件保持原样，避免换行差异导致巨型 diff
+package-lock.json -diff linguist-generated=true
