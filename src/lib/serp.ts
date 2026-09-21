@@ -132,7 +132,7 @@ function extractItems(html: string, engine: SearchEngine, baseUrl: string): Part
     if (!looksLikeValidHost(domain)) continue;
 
     raw.push({
-      title: title.slice(0, 200),
+      title: unescapeUnicode(title).slice(0, 200),
       url: absolute,
       domain,
       snippet: buildSnippet(inner, absolute),
@@ -323,10 +323,45 @@ function selectContainers(html: string, engine: SearchEngine) {
   }
 }
 
+/**
+ * 中文引擎常把结果塞在页面内嵌的 JSON 里，取出来的文本会是
+ * `\u4ea4\u6613\u5e73\u53f0` 这种未解码的转义序列 —— 直接展示给用户就是一串乱码。
+ * 这里统一还原成人类可读文本。
+ */
+function unescapeUnicode(s: string): string {
+  if (!/\\u[0-9a-fA-F]{4}/.test(s)) return s;
+  return s
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) =>
+      String.fromCharCode(parseInt(hex, 16))
+    )
+    .replace(/\\\//g, "/")
+    .replace(/\\[nrt]/g, " ");
+}
+
 function buildSnippet(inner: string, excludeUrl: string): string {
-  const text = stripTags(inner);
-  const cleaned = text.replace(excludeUrl, "").trim();
-  return cleaned.slice(0, 300);
+  // 中文引擎把大量结构化数据塞在内嵌 <script> 里。不去掉的话，
+  // stripTags 会把脚本里的 JSON 当正文，摘要就变成 `"size":"md"},"abstract":"…`。
+  const noScript = inner
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ");
+
+  // 各家给描述块的 class 不同（百度 c-abstract、搜狗 space-txt、360 res-desc），
+  // 先用关键词捞一次，捞不到再退回整段文本。
+  const descMatch = noScript.match(
+    /<(span|div|p|td)[^>]*(?:class|id)="[^"]*(?:abstract|desc|summary|space-txt|content-right|text-layout)[^"]*"[^>]*>([\s\S]{20,800}?)<\/\1>/i
+  );
+  const source = descMatch ? descMatch[2] : noScript;
+
+  const text = unescapeUnicode(stripTags(source))
+    .replace(excludeUrl, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // 兜底：如果仍残留 JSON 结构符号，说明这段文本不是给人看的，宁可留空
+  const looksLikeJson = /"\s*:\s*"/.test(text) || /\}\s*,\s*\{/.test(text);
+
+  return looksLikeJson ? "" : text.slice(0, 300);
 }
 
 

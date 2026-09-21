@@ -43,6 +43,31 @@ open-seo 是个好项目 —— 28 万行代码、自研站点审计爬虫、完
 | **AI 抓取协议层** | robots.txt 的 20 个 AI 爬虫策略检测、llms.txt 校验与自动生成 |
 | **MCP Server** | 上述全部能力对外开放，两种传输方式 |
 
+## 界面
+
+首页把能力地图、与 open-seo 的逐项对比、以及"抓不到就说抓不到"的处理原则摊在一屏里：
+
+![首页](docs/screenshots/01-home.png)
+
+<table>
+<tr>
+<td width="50%"><b>多引擎关键词排名</b><br>中文引擎真实位次，摘要为可直接阅读的正文（下图为「跨境支付平台」实采）</td>
+<td width="50%"><b>页面审计与 GEO 评分</b><br>六维 AI 引用友好度拆解 + 37 项技术检查明细</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/02-serp.png" alt="多引擎关键词排名"></td>
+<td><img src="docs/screenshots/03-audit.png" alt="页面审计与 GEO 评分"></td>
+</tr>
+<tr>
+<td><b>AI 抓取协议层</b><br>20 个 AI 爬虫的 robots 策略 + llms.txt 校验与生成</td>
+<td><b>MCP Server</b><br>8 个工具、两种传输方式，附可直接粘贴的接入配置</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/04-llms.png" alt="AI 抓取协议层"></td>
+<td><img src="docs/screenshots/05-mcp.png" alt="MCP Server"></td>
+</tr>
+</table>
+
 ## 快速开始
 
 ```bash
