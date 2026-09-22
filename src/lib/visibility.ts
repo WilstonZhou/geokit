@@ -29,10 +29,12 @@
 import { createHash } from "node:crypto";
 
 import { fetchWithPolicy, type FetchPurpose, type FetchResult } from "./fetcher";
-import type { AiObservationStatus, Confidence } from "./evidence/types";
+import type { AiObservationStatus, Confidence, Evidence } from "./evidence/types";
 import { aiSlotSubject, providerSource } from "./evidence/identity";
 import { summarizeAiStatuses, visibilityScoreOf, type AiStatusSummary } from "./evidence/ai-status";
-import { recordFetch } from "./evidence/store";
+import { evidenceEnabled, evidenceFromFetch } from "./evidence/store";
+import { createStore, type Store } from "./store";
+import { recordAiObservation } from "./observers/ai";
 
 const AI_TIMEOUT_MS = 30_000;
 
@@ -229,6 +231,13 @@ export interface VisibilityProbe {
 
   /** 本次观测对应的原始素材 id；Evidence 未开启时为 null */
   evidenceId: string | null;
+  /**
+   * 本次观测落成的 `ai_mention` Observation id（Phase 1 S5）。
+   *
+   * 为 null 只有两种可能：Evidence 没开（默认 off），或**根本没有素材**
+   * （未配 key / 协议不支持）—— 后者按约定不产结论，也不留假记录。
+   */
+  observationId?: string | null;
 
   /** 无法观测时的具体原因 */
   unobservableReason?: UnobservableReason;
@@ -280,6 +289,58 @@ export const PROMPT_TEMPLATE_VERSION = "1.0.0";
 /** 从原始响应抽取结论的解析器版本 */
 export const AI_VISIBILITY_PARSER_VERSION = "ai-visibility@0.1.0";
 
+/* ------------------------------------------------------------------ */
+/* 第六态：INDETERMINATE 的判定（Phase 1 S5）                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 低于这个字符数的回答视为「没有实质内容」。
+ *
+ * 刻意取得很小（16）—— 阈值的作用是拦住「好。」「没有。」这类敷衍，
+ * 而不是替模型判断回答质量。宁放过，不错杀：错杀一条真实回答的代价，
+ * 比放过一条敷衍回答高得多（后者还能用 more data 修正，前者直接丢数据）。
+ */
+export const AI_LOW_SIGNAL_MIN_CHARS = 12;
+
+/**
+ * 拒答模式。**每一条都必须含「无法给出」语义**，不能只看开头套话。
+ *
+ * 反例（刻意排除）：`作为一个AI助手，我认为…` —— 这是开场白不是拒答，
+ * 若按「提到 AI 就算拒答」判，会把大量正常回答误杀成 INDETERMINATE。
+ */
+const REFUSAL_PATTERNS: readonly RegExp[] = [
+  /我(?:暂时)?(?:无法|不能|没办法)(?:提供|回答|推荐|给出|确认|确定|访问|获取|联网|查询)/,
+  /(?:暂时)?(?:无法|不能)(?:提供|回答|推荐|给出|确定|访问|获取)/,
+  /(?:抱歉|对不起|不好意思)[，,、]?\s*我(?:无法|不能|没有|也不)/,
+  /没有(?:相关|足够|任何)(?:的)?(?:信息|资料|数据|内容)/,
+  /(?:cannot|can't|unable to|not able to)\s+(?:provide|answer|recommend|access|assist|help)/i,
+  /(?:i'?m sorry|sorry)[,.]?\s*(?:but\s+)?i\s+(?:can'?t|cannot|am unable|am not able)/i,
+];
+
+export type AnswerSignal = { lowSignal: true; reason: LowSignalReason } | { lowSignal: false };
+
+export type LowSignalReason = "empty" | "too_short" | "refusal";
+
+/**
+ * 回答够不够格被用来判定「有没有提到品牌」。
+ *
+ * 抽成纯函数是为了让它能被离线断言 —— 判定阈值这种东西一旦埋在
+ * async 调用链里，就只能靠九个模型的真实回答去凑，而真实回答不可复现。
+ */
+export function judgeAnswerSignal(text: string): AnswerSignal {
+  const t = (text ?? "").trim();
+  if (!t) return { lowSignal: true, reason: "empty" };
+  if (t.length < AI_LOW_SIGNAL_MIN_CHARS) return { lowSignal: true, reason: "too_short" };
+  if (REFUSAL_PATTERNS.some((re) => re.test(t))) return { lowSignal: true, reason: "refusal" };
+  return { lowSignal: false };
+}
+
+const LOW_SIGNAL_LABEL: Record<LowSignalReason, string> = {
+  empty: "回答为空",
+  too_short: `回答过短（少于 ${AI_LOW_SIGNAL_MIN_CHARS} 字符）`,
+  refusal: "模型拒答",
+};
+
 /**
  * 统一采样参数。
  *
@@ -306,15 +367,130 @@ function buildPrompt(brand: string, topic: string): { text: string; version: str
   return { text, version: PROMPT_TEMPLATE_VERSION, hash: promptHash(text) };
 }
 
+/* ------------------------------------------------------------------ */
+/* Evidence 落盘（S5：AI 通道接进 Store）                                */
+/* ------------------------------------------------------------------ */
+
+/** 一次 LLM 调用的存证结果 */
+interface AiEvidenceRecord {
+  id: string;
+  evidence: Evidence;
+  /** 复用 runVisibilityMatrix 传下来的实例，避免并发下互相覆盖 */
+  store: Store;
+  body: string;
+}
+
+/**
+ * 把一次 LLM 调用落成 `llm_response` Evidence —— AI Observer 的输入。
+ *
+ * 原本走的是 Phase 0 的 `recordFetch()`（legacy appendRecord）。换成 S2 的
+ * Store 不是洁癖，是**必然**：Observation 必须能指回 Store 里的 Evidence，
+ * 而 legacy 那份压根不进同一个索引。
+ *
+ * 三条边界与 S3 / S4 完全一致：
+ *   1. 总闸沿用 `GEOKIT_EVIDENCE`（默认 off），默认行为零变化
+ *   2. identity 注入在本函数内完成，不改 `evidenceFromFetch()` 签名
+ *   3. 失败捕获返回 null：存证是旁路，绝不因此让调用方拿不到探测结果
+ */
+async function recordLlmEvidence(
+  res: FetchResult,
+  provider: AiProvider,
+  shared?: Store
+): Promise<AiEvidenceRecord | null> {
+  if (!evidenceEnabled()) return null;
+
+  try {
+    const patched: FetchResult = {
+      ...res,
+      context: {
+        ...res.context,
+        subject: aiSlotSubject(provider.id, provider.apiModel),
+        source: providerSource(provider.id),
+      },
+    };
+
+    const ev = evidenceFromFetch(patched, "llm_response");
+
+    // ★ 兜底修正（S1 已知缺陷，本轮不改动 S1 代码）：
+    //   normalizeEvidence 会把缺 provenance 的记录判成旧契约，并用
+    //   `target`（此处是 provider id）重新推导，覆盖上面注入的 subject。
+    //   处理方式与 S3 / S4 保持一致。
+    ev.subject = aiSlotSubject(provider.id, provider.apiModel);
+    ev.source = providerSource(provider.id);
+    ev.migratedFrom = undefined;
+
+    // 与 S3 / S4 同构：拿到了响应就标记正文已留存，保证 Observer 可重放。
+    // AI 回答体积远小于 SERP HTML（受 maxTokens=1024 约束），留存代价可接受。
+    const body = res.body;
+    if (res.status > 0 || body.length > 0) ev.response.bodyRetained = true;
+
+    const store = shared ?? createStore();
+    const saved = await store.saveEvidence(ev, body ? { body } : undefined);
+    return { id: saved.id, evidence: ev, store, body };
+  } catch (e) {
+    console.error(
+      "[geokit] AI Evidence 落盘失败，本次无存证：",
+      e instanceof Error ? e.message : e
+    );
+    return null;
+  }
+}
+
+/**
+ * 单次探测的共享上下文（Phase 1 S5）。
+ *
+ * `store` 存在的理由很具体：Observation 是全量重写式追加
+ * （`observations.jsonl`），九个探针若各自 `createStore()`，
+ * 并发落库会互相覆盖 —— 一次矩阵跑完只剩最后一个槽位的结论。
+ * 因此由 `runVisibilityMatrix` 建一个实例传进来。不传（单次调用）时
+ * 内部自建，那种场景没有并发。
+ */
+export interface ProbeContext {
+  store?: Store;
+}
+
 /**
  * 单次探测。真实调用需要对应厂商的 API key。
- * 没有 key 时不猜测、不编造，如实返回 unconfigured。
+ * 没有 key 时不猜测、不编造，如实返回 UNOBSERVABLE。
+ *
+ * ★ 这里是 VisibilityProbe 对外的唯一出口：跑完状态机后，若本次留下了
+ *   `llm_response` Evidence，就顺势落成一条 `ai_mention` Observation。
+ *   探测本身的返回结构一行未变 —— 只是多了一个 `observationId` 字段。
  */
 export async function probeProvider(
   provider: AiProvider,
   brand: string,
   topic: string,
-  apiKey?: string
+  apiKey?: string,
+  ctx?: ProbeContext
+): Promise<VisibilityProbe> {
+  /** 本次调用是否留下了 Evidence —— 由内层赋值，外层据此决定是否产出结论 */
+  const sink: { record: AiEvidenceRecord | null } = { record: null };
+  const probe = await runProbe(provider, brand, topic, apiKey, ctx?.store, sink);
+
+  const store = sink.record?.store ?? ctx?.store;
+  if (store && (sink.record || probe.evidenceId)) {
+    const r = await recordAiObservation(store, {
+      evidence: sink.record?.evidence ?? null,
+      probe,
+      brand,
+      topic,
+    });
+    // 结论落不上不能让探测失败 —— 但它也不能被说成成功了（W-3）
+    if (r.ok) probe.observationId = r.id;
+    else console.error("[geokit] AI Observation 未生成：", r.reason);
+  }
+
+  return probe;
+}
+
+async function runProbe(
+  provider: AiProvider,
+  brand: string,
+  topic: string,
+  apiKey: string | undefined,
+  sharedStore: Store | undefined,
+  sink: { record: AiEvidenceRecord | null }
 ): Promise<VisibilityProbe> {
   const started = Date.now();
   const prompt = buildPrompt(brand, topic);
@@ -353,12 +529,7 @@ export async function probeProvider(
   let evidenceId: string | null = null;
 
   try {
-    const { result, evidence } = await recordFetch(
-      () => callProvider(provider, apiKey, prompt.text),
-      "llm_response"
-    );
-    res = result;
-    evidenceId = evidence?.id ?? null;
+    res = await callProvider(provider, apiKey, prompt.text);
   } catch (e) {
     // 协议不支持 —— 不是调用失败，是我们还没有这个观测能力
     return {
@@ -368,6 +539,13 @@ export async function probeProvider(
       elapsedMs: Date.now() - started,
     };
   }
+
+  // 调用产生了（无论成功失败）→ 落成 `llm_response` Evidence。
+  // 放在出错判断之前：厂商拒绝的那一页也是有价值的素材，
+  // 「这一小时一直被 429 挡着」这种信息不该丢。
+  const record = await recordLlmEvidence(res, provider, sharedStore);
+  sink.record = record;
+  evidenceId = record?.id ?? null;
 
   const elapsedMs = Date.now() - started;
 
@@ -443,11 +621,14 @@ const BLOCKED_STATUSES = new Map<number, string>([
 /**
  * 构造已成功观测的探针。
  *
- * 关于 confidence 恒为 medium —— 这是刻意的：
+ * 关于 MENTIONED / NOT_MENTIONED 的 confidence 恒为 medium —— 这是刻意的：
  *   即使 temperature=0，也没有任何厂商承诺逐字节一致；
  *   单次探测本质是 N=1 的采样，不具备统计意义。
  * 若这里标 high，等于宣称「模型此刻没提到你 = 它永远不会提到你」，
  * 那正是本项目最反对的那种伪装。
+ *
+ * 唯一的例外是 INDETERMINATE：`medium` 会暗示「我们有个中等可信的结论」，
+ * 而事实是这一轮**没有结论**，只能是 `unavailable`。
  */
 function buildObservedProbe(args: {
   base: VisibilityProbe;
@@ -458,6 +639,31 @@ function buildObservedProbe(args: {
   elapsedMs: number;
 }): VisibilityProbe {
   const { base, text, servedModel, evidenceId, brand, elapsedMs } = args;
+
+  // ── 第六态：INDETERMINATE（Phase 1 S5 落地）───────────────────
+  // 拿到的是可解析的回答，但它不足以支撑「有没有提到」这个判断。
+  // 典型场景是拒答：「我无法推荐具体厂商，建议咨询专业人士。」
+  // 这句话里若恰好含有品牌名，旧实现会把它判成 MENTIONED；
+  // 不含判成 NOT_MENTIONED —— 两种都是把「厂商不肯说」记账成别的意思。
+  const signal = judgeAnswerSignal(text);
+  if (signal.lowSignal) {
+    return {
+      ...base,
+      status: "INDETERMINATE",
+      // ★ 即便文本里含品牌也一律 false：拒答句里出现品牌不代表被推荐
+      mentioned: false,
+      excerpt: text.slice(0, 400),
+      rawResponse: text,
+      citedDomains: extractDomains(text),
+      servedModel,
+      evidenceId,
+      confidence: "unavailable",
+      caveat: `模型未给出可判定的回答（${LOW_SIGNAL_LABEL[signal.reason]}）—— 这是「没回答」而不是「没提到」，不计入命中率分母`,
+      note: `无法判定是否提及（${LOW_SIGNAL_LABEL[signal.reason]}）。如需结论，建议换一种提问方式重试。`,
+      elapsedMs,
+    };
+  }
+
   const mentioned = brand.length > 0 && text.toLowerCase().includes(brand.toLowerCase());
 
   return {
@@ -633,8 +839,11 @@ export async function runVisibilityMatrix(
   topic: string,
   keys: Partial<Record<ProviderId, string>> = {}
 ): Promise<VisibilityReport> {
+  // 九个探针**共享一个 Store**：Observation 是全量重写式追加，
+  // 各自建实例会互相覆盖。详见 ProbeContext 的注释。
+  const store = evidenceEnabled() ? createStore() : undefined;
   const probes = await Promise.all(
-    PROVIDER_LIST.map((p) => probeProvider(p, brand, topic, keys[p.id]))
+    PROVIDER_LIST.map((p) => probeProvider(p, brand, topic, keys[p.id], store ? { store } : undefined))
   );
   return buildVisibilityReport(brand, topic, probes);
 }
