@@ -37,6 +37,7 @@
     "test:diff": "tsx scripts/test-diff.ts",
     "test:observation-api": "tsx scripts/test-observation-api.ts",
     "test:sqlite-store": "tsx scripts/test-sqlite-store.ts",
+    "test:diagnosis": "tsx scripts/test-diagnosis.ts",
     "mcp": "tsx scripts/mcp-stdio.ts"
   },
   "dependencies": {
