@@ -17,6 +17,7 @@ import { evidenceEnabled, evidenceFromFetch } from "./evidence/store";
 import { httpSource, siteSubject } from "./evidence/identity";
 import type { Evidence } from "./evidence/types";
 import { createStore, type Store } from "./store";
+import { recordSiteObservation } from "./observers/site";
 
 export interface CheckResult {
   id: string;
@@ -123,6 +124,18 @@ export async function auditUrl(inputUrl: string): Promise<PageAudit> {
   // ── Commit A：把这次采集落成 page_html Evidence（S3 的合法输入）──
   const rec = await recordAuditEvidence(grabbed, normalized, finalUrl);
 
+  // ── Commit B：Site Observer（page_html → geo_score）──
+  //   只有 Evidence 真的落盘了才产结论（W-1）。失败只记日志，绝不阻断
+  //   PageAudit 返回，也绝不把「没存上」说成「观测成功」（W-3）。
+  if (rec) {
+    const obs = await recordSiteObservation(rec.store, {
+      evidence: rec.evidence,
+      body: rec.body,
+      inputUrl: normalized,
+    });
+    if (!obs.ok) console.error("[geokit] Site Observation 未生成：", obs.reason);
+  }
+
   // 原实现仅在 fetch 抛异常时走 emptyAudit —— 网络层失败才属此类，
   // HTTP 非 2xx（如 404 页面）原本也会被继续 analyze，此处保持一致。
   if (grabbed.body === "" && !grabbed.ok && grabbed.error && grabbed.error.kind !== "http_error") {
@@ -224,7 +237,14 @@ function normalizeUrl(u: string): string {
   return `https://${t}`;
 }
 
-function emptyAudit(url: string, error: string, ms: number): PageAudit {
+/**
+ * 「根本没拿到页面」时的审计结果。
+ *
+ * ★ 导出给 Site Observer 用 —— 没有响应体时不该去跑 11 项检查，那会算出
+ *   一个看起来合理、实则毫无依据的分数。抓不到就是抓不到，分数一律 0。
+ *   算法本身与 Phase 0 完全一致，导出不改任何行为。
+ */
+export function emptyAudit(url: string, error: string, ms: number): PageAudit {
   return {
     url,
     finalUrl: url,

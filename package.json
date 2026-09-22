@@ -31,6 +31,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test:store": "tsx scripts/test-store.ts",
+    "test:site-observer": "tsx scripts/test-site-observer.ts",
     "mcp": "tsx scripts/mcp-stdio.ts"
   },
   "dependencies": {
