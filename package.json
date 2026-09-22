@@ -34,6 +34,7 @@
     "test:site-observer": "tsx scripts/test-site-observer.ts",
     "test:search-observer": "tsx scripts/test-search-observer.ts",
     "test:ai-observer": "tsx scripts/test-ai-observer.ts",
+    "test:diff": "tsx scripts/test-diff.ts",
     "mcp": "tsx scripts/mcp-stdio.ts"
   },
   "dependencies": {
