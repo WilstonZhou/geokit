@@ -1,6 +1,46 @@
+---
+AIGC:
+  ContentProducer: '001191110102MAD55U9H0F10002'
+  ContentPropagator: '001191110102MAD55U9H0F10002'
+  Label: '1'
+  ProduceID: '4cf06090-50cc-45e4-beb1-ffb3a44efdda'
+  PropagateID: '4cf06090-50cc-45e4-beb1-ffb3a44efdda'
+  ReservedCode1: '05361384-df8f-4b75-9eb2-68dfaa762101'
+  ReservedCode2: '05361384-df8f-4b75-9eb2-68dfaa762101'
+---
+
 # 变更日志
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
+
+## [决策] — 2026-09-22 · 数据源强制原则（全局）
+
+> 依据：《GeoKit 整体项目路线与实施规划》第 0 节「新增硬性原则」。
+
+**项目所有数据源必须是自建检索（自写爬虫/解析器直接拿数据）或免费开源工具获取，
+不引入任何付费数据源。**
+
+已全量盘点仓库数据源，结论与豁免：
+
+| 数据源 | 方式 | 合规 |
+| --- | --- | --- |
+| SERP 采集（7 引擎） | 自建爬虫 + 位次解析（`serp.ts`/`engines.ts`） | 合规 |
+| 页面审计 / GEO 评分 | 自建抓取 + 本地分析（`audit.ts`） | 合规 |
+| robots.txt / llms.txt | 自建协议层（`llms.ts`） | 合规 |
+| HTTP 抓取 | Node 原生 `fetch`（`fetcher/`） | 合规 |
+| 存储 | JSONL + `node:sqlite`（零新增依赖） | 合规 |
+| CLI / CI 门禁 | 本地计算 + GitHub Actions 免费层 | 合规 |
+| **AI 可见性探测（9 模型）** | **厂商官方 API（需用户自填 key）** | **唯一豁免** |
+
+豁免理由（用户明确确认）：AI 可见性保留付费模型接口，用户使用时自行填入
+`DEEPSEEK/DOUBAO/KIMI/QWEN/WENXIN/YUANBAO/OPENAI/ANTHROPIC/GEMINI_API_KEY`。
+未配 key 时返回 `UNOBSERVABLE`（不伪造结果，见 Phase 0 冻结契约）。该豁免
+不应再扩大范围；后续新增能力涉及外部数据一律先问「能否自建或免费开源」。
+
+另：`.env.example` 中残留 `PERPLEXITY_API_KEY`，与 `visibility.ts` 的 `PROVIDERS`
+（9 个）不一致 —— 该变量未被任何代码引用，属死配置，应清理。
+
+---
 
 ## [Phase 0] — 2026-09-22 · Observable Foundation（已冻结）
 
@@ -191,3 +231,5 @@ HTML 解析、位次计算、robots 解析全部自研，不引 cheerio/jsdom。
 
 选 Next.js 而非 open-seo 的 TanStack Start，是为了让整套东西在周老板现有的
 技术栈里可以直接改、直接上线。
+
+> AI生成

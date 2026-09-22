@@ -1,3 +1,14 @@
+---
+AIGC:
+  ContentProducer: '001191110102MAD55U9H0F10002'
+  ContentPropagator: '001191110102MAD55U9H0F10002'
+  Label: '1'
+  ProduceID: '6b9414ca-b1fb-4c4b-a1a0-07811ce02a3f'
+  PropagateID: '6b9414ca-b1fb-4c4b-a1a0-07811ce02a3f'
+  ReservedCode1: '924bebf3-6f3b-42e2-99b1-c9a3e8febb36'
+  ReservedCode2: '924bebf3-6f3b-42e2-99b1-c9a3e8febb36'
+---
+
 # 鲸析 GEOkit
 
 > 面向中文市场与 AI 搜索时代的开源 SEO / GEO 作战系统
@@ -77,6 +88,22 @@ npm run dev        # http://localhost:3210
 ```
 
 核心功能不需要任何付费 API —— 装上就能跑。
+
+## 数据源原则（强制）
+
+**项目所有数据源必须是自建检索（自写爬虫/解析器直接拿数据）或免费开源工具获取，不引入任何付费数据源。**
+
+| 数据源 | 获取方式 |
+| --- | --- |
+| SERP（百度/搜狗/360/神马/头条/Google/Bing） | 自建采集 + 位次解析（`src/lib/serp.ts` + `engines.ts`） |
+| 页面审计 / GEO 评分信号 | 自建抓取 + 本地分析（`src/lib/audit.ts`） |
+| robots.txt / llms.txt | 自建协议层（`src/lib/llms.ts`） |
+| 存储 | JSONL + `node:sqlite`（Node 内置，零新增依赖） |
+| CI / 门禁 | GitHub Actions 免费层 + 本地 CLI |
+
+唯一豁免：**AI 可见性探测**（`src/lib/visibility.ts`）调用 9 家模型厂商官方接口，
+需要用户自行填入 API key 才能使用 —— 这是项目里唯一的付费通道，且未配 key 时如实返回
+`UNOBSERVABLE`，绝不伪造结果。
 
 ## GEO 评分是什么
 
@@ -177,3 +204,5 @@ scripts/mcp-stdio.ts   stdio 传输入口
 ## 许可证
 
 MIT
+
+> AI生成
