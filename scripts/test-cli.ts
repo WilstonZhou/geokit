@@ -27,7 +27,7 @@ import {
 } from "../packages/cli/src/check";
 import { DEFAULT_GATE, evaluateGate, runGate, snapshotFromFile, snapshotOf, type GateSnapshot } from "../packages/cli/src/gate";
 import { runDiff } from "../packages/cli/src/diff";
-import { parseFormat, renderCheck, renderDiff, renderGate } from "../packages/cli/src/output";
+import { OUTPUT_FORMATS, parseFormat, renderCheck, renderDiff, renderGate } from "../packages/cli/src/output";
 import { analyze } from "../src/lib/audit";
 import { AI_CRAWLERS, type AiCrawler } from "../src/lib/llms";
 import { createStore } from "../src/lib/store";
@@ -217,13 +217,8 @@ async function main(): Promise<void> {
 
   eq("默认 markdown", parseFormat(undefined), "markdown");
   eq("json", parseFormat("JSON"), "json");
-  let sarifErr = "";
-  try {
-    parseFormat("sarif");
-  } catch (e) {
-    sarifErr = e instanceof Error ? e.message : String(e);
-  }
-  check("sarif 明确报错（S2-3 才实现，不静默退化）", sarifErr.includes("S2-3"), sarifErr);
+  eq("sarif 已是正式格式（S2-3）", parseFormat("sarif"), "sarif");
+  eq("格式清单含三种", OUTPUT_FORMATS, ["json", "markdown", "sarif"]);
   let bogusErr = "";
   try {
     parseFormat("yaml");

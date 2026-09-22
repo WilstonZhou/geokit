@@ -11,12 +11,13 @@
  *   geokit diff --subject=<s> --type=<t> [--source=] [--to=]
  *   geokit diff --prev=<a.json> --curr=<b.json>
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 import { checkHtml, checkUrl, type CheckReport } from "./check";
 import { runDiff } from "./diff";
-import { runGate, snapshotFromFile, snapshotOf } from "./gate";
-import { parseFormat, renderCheck, renderDiff, renderGate } from "./output";
+import { runGate, snapshotOf } from "./gate";
+import { OUTPUT_FORMATS, parseFormat, renderCheck, renderDiff, renderGate, renderJson } from "./output";
+import { sarifFromCheckReport } from "./sarif";
 
 interface Args {
   command: string | null;
@@ -44,9 +45,40 @@ function parseArgs(argv: string[]): Args {
   return { command, positional, flags };
 }
 
+/**
+ * 输出落点。
+ *
+ * CI 里必须能把 SARIF 单独写成文件（Code Scanning 要的是 `sarif_file: <path>`），
+ * 所以给所有命令加 `--out=<path>`：给了就写文件，不给走 stdout。
+ */
+function emit(text: string, out: string | undefined): void {
+  if (out) {
+    writeFileSync(out, text);
+    process.stderr.write(`已写入 ${out}\n`);
+    return;
+  }
+  process.stdout.write(text);
+}
+
+/** 读一份 check 产物 json（SARIF 转换与 gate 都靠它，避免 CI 重复抓取） */
+function readCheckReport(path: string): CheckReport {
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+  if (!Array.isArray(parsed.diagnoses)) {
+    throw new Error(`不是 check 产物（缺少 diagnoses 数组）：${path}`);
+  }
+  return parsed as unknown as CheckReport;
+}
+
+/** check 产物里记录的 URL（给 gate 的 SARIF 当定位用；没有就不给） */
+function urlOf(report: CheckReport): string {
+  return report.finalUrl ?? report.url;
+}
+
 const USAGE = `geokit — 鲸析 GEOkit 命令行
 
-  geokit check <url> [--html-file=<path>] [--status=200] [--format=json|markdown] [--skip-protocol]
+  所有命令均支持 --format=${OUTPUT_FORMATS.join("|")} [--out=<path>]
+
+  geokit check <url> [--html-file=<path>] [--status=200] [--skip-protocol]
       页面检查：audit + robots + llms.txt → Diagnosis
       退出码：有 blocker / major ⇒ 1，否则 0
       --html-file 走离线模式，不联网（测试与 fixture 复现用）
@@ -56,7 +88,11 @@ const USAGE = `geokit — 鲸析 GEOkit 命令行
       退出码：fail ⇒ 1，否则 0
       不跑 Search / AI Observer —— CI 里跑它们等于主动撞风控
 
-  geokit diff --subject=<s> --type=<t> [--source=] [--to=] [--dir=] [--format=json|markdown]
+  geokit sarif --report=<check.json> [--out=geokit.sarif]
+      把已有 check 产物转成 SARIF 2.1.0 —— 离线转换，不重复抓取
+      定位规则：artifactLocation.uri = targetUrl，无 region（没有行号就不写）
+
+  geokit diff --subject=<s> --type=<t> [--source=] [--to=] [--dir=]
   geokit diff --prev=<a.json> --curr=<b.json>
       观测差异：判定逻辑全在 S6 diff 引擎，CLI 只取数与渲染
       文件模式给 CI 用（runner 上没有 Store）；Store 模式本地用
@@ -89,16 +125,21 @@ async function main(): Promise<number> {
           skipProtocolChecks: flags["skip-protocol"] === "true",
         });
       }
-      process.stdout.write(renderCheck(report, format));
+      emit(renderCheck(report, format), flags.out);
       return report.exitCode;
     }
 
     case "gate": {
       let snapshot;
+      let url: string | undefined;
       if (flags.report) {
-        snapshot = snapshotFromFile(flags.report);
+        // 报告自带 URL —— SARIF 定位要用；没有就不写 location，不编造
+        const rep = readCheckReport(flags.report);
+        snapshot = snapshotOf(rep);
+        url = urlOf(rep);
       } else if (flags.url) {
         // 现跑一次 check（联网）。CI 里更推荐先 check --format=json 存产物
+        url = flags.url;
         snapshot = snapshotOf(await checkUrl(flags.url));
       } else {
         process.stderr.write("gate 需要 --report=<check.json> 或 --url=<url>\n");
@@ -113,8 +154,18 @@ async function main(): Promise<number> {
         to: flags.to,
         dir: flags.dir,
       });
-      process.stdout.write(renderGate(report, format));
+      emit(renderGate(report, format, { url }), flags.out);
       return report.exitCode;
+    }
+
+    case "sarif": {
+      if (!flags.report) {
+        process.stderr.write("sarif 需要 --report=<check.json>（先用 geokit check --format=json 产出）\n");
+        return 2;
+      }
+      // 离线转换：不联网、不重跑 check —— CI 里页面只抓一次
+      emit(renderJson(sarifFromCheckReport(readCheckReport(flags.report))), flags.out);
+      return 0;
     }
 
     case "diff": {
@@ -127,7 +178,7 @@ async function main(): Promise<number> {
         curr: flags.curr,
         dir: flags.dir,
       });
-      process.stdout.write(renderDiff(report, format));
+      emit(renderDiff(report, format), flags.out);
       if (report.exitCode !== 0) {
         process.stderr.write("没有可比较的观测（Store 中无记录），退出码 1\n");
       }

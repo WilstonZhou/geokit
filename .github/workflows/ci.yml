@@ -37,3 +37,100 @@ jobs:
             | timeout 30 npx tsx scripts/mcp-stdio.ts | tee mcp-out.txt
           grep -q '"protocolVersion"' mcp-out.txt
           grep -q 'list_engines' mcp-out.txt
+
+  # ------------------------------------------------------------------
+  # Phase 2 · S2-3 —— GEOkit 检查 + SARIF + 门禁
+  #
+  # 三条硬约束：
+  #   1 目标 URL 来自 repository/environment variable（vars.GEOKIT_TARGET_URL），
+  #     绝不硬编码生产地址；缺失则**明确跳过并在日志里说明**，不伪造 URL。
+  #   2 检查者 = CLI 冷启动，不依赖跑着的 Web 服务。
+  #   3 门禁判定全在 `geokit gate`（S2-2），这里只搬运产物，不复制判定。
+  #      特别保留语义：**无 baseline ≠ PASS**。
+  #
+  # 不跑 Search / AI Observer —— 付费、随机、易触发风控，放进每次 PR 的 CI
+  # 只会让人学会跳过这个检查（roadmap §十三）。
+  # ------------------------------------------------------------------
+  geokit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+      # upload-sarif 需要它，否则 GitHub 不给写 Code Scanning 结果
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 上一次的产物当基线（跨 job/run 传递只能用 artifact）。
+      # 首次运行没有 ⇒ download 会失败，continue-on-error 让它继续，
+      # 后面由 gate 明确说出「未做退化判定」。
+      - name: 拉取上次基线产物
+        uses: actions/download-artifact@v4
+        with:
+          name: geokit-baseline
+          path: geokit-baseline
+        continue-on-error: true
+
+      - name: 确认目标 URL 是否已配置
+        id: target
+        env:
+          GEOKIT_TARGET_URL: ${{ vars.GEOKIT_TARGET_URL }}
+        run: |
+          if [ -z "$GEOKIT_TARGET_URL" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=GEOkit::未配置 vars.GEOKIT_TARGET_URL，跳过 GEOkit 检查（不猜测目标地址）"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=GEOkit::检查目标 $GEOKIT_TARGET_URL"
+          fi
+
+      # 页面只抓一次 → json 产物同时喂给 SARIF 转换和 gate
+      - name: geokit check（产出报告）
+        if: steps.target.outputs.skip == 'false'
+        env:
+          GEOKIT_TARGET_URL: ${{ vars.GEOKIT_TARGET_URL }}
+        run: npm run cli -- check "$GEOKIT_TARGET_URL" --format=json --out=geokit-ci/report.json
+        continue-on-error: true
+
+      - name: 生成 SARIF（离线转换，不重复抓取）
+        if: steps.target.outputs.skip == 'false'
+        run: npm run cli -- sarif --report=geokit-ci/report.json --out=geokit-ci/geokit.sarif
+
+      - name: 上传 SARIF 到 Code Scanning
+        if: steps.target.outputs.skip == 'false'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: geokit-ci/geokit.sarif
+          category: geokit
+
+      - name: 门禁判定（复用 S2-2 gate）
+        if: steps.target.outputs.skip == 'false'
+        env:
+          GEOKIT_TARGET_URL: ${{ vars.GEOKIT_TARGET_URL }}
+        run: |
+          BASE=""
+          if [ -f geokit-baseline/report.json ]; then
+            BASE="--base=geokit-baseline/report.json"
+          else
+            echo "::warning title=GEOkit::没有找到基线产物 ⇒ 本次不做退化判定（不代表通过）"
+          fi
+          # gate 的退出码才是这个 job 的成败；语义全在 gate 内部，这里不复制
+          npm run cli -- gate $BASE --report=geokit-ci/report.json --format=markdown
+
+      - name: 存档本次报告作为下次基线
+        if: always() && steps.target.outputs.skip == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: geokit-baseline
+          path: geokit-ci/report.json
+          overwrite: true

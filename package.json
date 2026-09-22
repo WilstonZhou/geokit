@@ -39,6 +39,7 @@
     "test:sqlite-store": "tsx scripts/test-sqlite-store.ts",
     "test:diagnosis": "tsx scripts/test-diagnosis.ts",
     "test:cli": "tsx scripts/test-cli.ts",
+    "test:sarif": "tsx scripts/test-sarif.ts",
     "cli": "tsx packages/cli/src/bin.ts",
     "mcp": "tsx scripts/mcp-stdio.ts"
   },

@@ -4,24 +4,25 @@
  * 三种格式：
  *   json      机器读 —— 进 CI 产物、做 baseline、被别的工具解析
  *   markdown  人读 —— PR 评论、终端
- *   sarif     S2-3 才实现；这里**明确报错**，不静默退化成别的格式
+ *   sarif     GitHub Code Scanning（S2-3 实现）
+ *             审计对象是远程 URL，所以 artifactLocation.uri = targetUrl，
+ *             **没有 region** —— 没有行号就省略，不编造。
  *
- * ★ 静默退化是最坏的错：调用方以为自己拿到了 SARIF，其实拿到的是 Markdown，
- *   然后在 GitHub Code Scanning 里看到一片空白，还查不出为什么。
+ * ★ 每个 render 函数都必须对自己支持的格式穷尽处理：
+ *   加格式时漏掉一个分支，就会静默退化成 markdown —— 调用方以为拿到 SARIF，
+ *   结果 GitHub Code Scanning 里一片空白还查不出为什么。
  */
 import type { CheckReport } from "./check";
 import type { GateReport } from "./gate";
 import type { DiffReport } from "./diff";
+import { sarifFromCheckReport, sarifFromGateReport } from "./sarif";
 
-export type OutputFormat = "json" | "markdown";
+export type OutputFormat = "json" | "markdown" | "sarif";
 
-export const OUTPUT_FORMATS: readonly OutputFormat[] = ["json", "markdown"];
+export const OUTPUT_FORMATS: readonly OutputFormat[] = ["json", "markdown", "sarif"];
 
 export function parseFormat(raw: string | undefined): OutputFormat {
   const v = (raw ?? "markdown").toLowerCase();
-  if (v === "sarif") {
-    throw new Error("SARIF 输出在 S2-3 实现（geokit 当前版本尚未支持），请改用 --format=json|markdown");
-  }
   if ((OUTPUT_FORMATS as readonly string[]).includes(v)) return v as OutputFormat;
   throw new Error(`未知输出格式 "${raw}"，可选：${OUTPUT_FORMATS.join(" | ")}`);
 }
@@ -36,6 +37,7 @@ export function renderJson(v: unknown): string {
 
 export function renderCheck(report: CheckReport, format: OutputFormat): string {
   if (format === "json") return renderJson(report);
+  if (format === "sarif") return renderJson(sarifFromCheckReport(report));
   return renderCheckMarkdown(report);
 }
 
@@ -89,8 +91,13 @@ function renderCheckMarkdown(r: CheckReport): string {
 /* gate                                                                */
 /* ------------------------------------------------------------------ */
 
-export function renderGate(report: GateReport, format: OutputFormat): string {
+export function renderGate(
+  report: GateReport,
+  format: OutputFormat,
+  ctx: { url?: string } = {}
+): string {
   if (format === "json") return renderJson(report);
+  if (format === "sarif") return renderJson(sarifFromGateReport(report, ctx));
   return renderGateMarkdown(report);
 }
 
