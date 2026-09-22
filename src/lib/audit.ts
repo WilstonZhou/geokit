@@ -12,7 +12,11 @@ import {
   findTags, stripTags, getTitle, getMeta, getAllMeta,
   getCanonical, getHeading, absolutize,
 } from "./html";
-import { fetchWithPolicy } from "./fetcher";
+import { fetchWithPolicy, type FetchResult } from "./fetcher";
+import { evidenceEnabled, evidenceFromFetch } from "./evidence/store";
+import { httpSource, siteSubject } from "./evidence/identity";
+import type { Evidence } from "./evidence/types";
+import { createStore, type Store } from "./store";
 
 export interface CheckResult {
   id: string;
@@ -65,6 +69,14 @@ export interface PageAudit {
   geoScore: number;
   geoBreakdown: GeeBreakdown[];
   recommendations: string[];
+  /**
+   * 本次审计对应的 `page_html` Evidence id（Phase 1 S3）。
+   *
+   * 仅在存证总闸开启、且 Evidence 确实落盘后出现；默认配置下为 undefined。
+   * 加它是为了让 HTTP / MCP 的调用方能顺着 id 回到原始素材 ——
+   * 结论能追溯到证据，是这个工具唯一的信用来源。
+   */
+  evidenceId?: string;
 }
 
 /** 结构化 OCR：这些是 LLM 最爱 cite 的内容形态 */
@@ -89,7 +101,6 @@ export async function auditUrl(inputUrl: string): Promise<PageAudit> {
 
   let html = "";
   let httpStatus = 0;
-  let finalUrl = normalized;
 
   const grabbed = await fetchWithPolicy({
     url: normalized,
@@ -105,17 +116,106 @@ export async function auditUrl(inputUrl: string): Promise<PageAudit> {
     target: normalized,
   });
 
+  // 采集耗时在此定格 —— 存证是旁路，不该把写盘时间算进页面响应耗时
+  const elapsedMs = Date.now() - started;
+  const finalUrl = grabbed.finalUrl || normalized;
+
+  // ── Commit A：把这次采集落成 page_html Evidence（S3 的合法输入）──
+  const rec = await recordAuditEvidence(grabbed, normalized, finalUrl);
+
   // 原实现仅在 fetch 抛异常时走 emptyAudit —— 网络层失败才属此类，
   // HTTP 非 2xx（如 404 页面）原本也会被继续 analyze，此处保持一致。
   if (grabbed.body === "" && !grabbed.ok && grabbed.error && grabbed.error.kind !== "http_error") {
-    return emptyAudit(normalized, grabbed.error.message, Date.now() - started);
+    const empty = emptyAudit(normalized, grabbed.error.message, elapsedMs);
+    if (rec) empty.evidenceId = rec.id;
+    return empty;
   }
 
   httpStatus = grabbed.status;
-  finalUrl = grabbed.finalUrl || normalized;
   html = grabbed.body;
 
-  return analyze(finalUrl, html, httpStatus, Date.now() - started);
+  const audit = analyze(finalUrl, html, httpStatus, elapsedMs);
+  if (rec) audit.evidenceId = rec.id;
+  return audit;
+}
+
+/** 一次 audit 采集的存证结果 */
+interface AuditEvidenceRecord {
+  /** Store 落库后返回的 id（与 evidence.id 一致，除非命中去重） */
+  id: string;
+  evidence: Evidence;
+  /** 复用同一实例，避免 JsonlStore 的惰性索引被重复构建 */
+  store: Store;
+  /** 实际留存到磁盘的 body 原文；未留存时为空串 */
+  body: string;
+}
+
+/**
+ * 把一次 audit 采集落成 `page_html` Evidence —— S3 Site Observer 的输入。
+ *
+ * 只做**事实留存**，不产出任何结论（结论是 Commit B 的 Site Observer 的事）。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 三条边界
+ * ─────────────────────────────────────────────────────────────
+ *   1. 总闸沿用 `GEOKIT_EVIDENCE`（默认 off）—— 默认行为零变化（W-1）
+ *   2. identity 与 body 留存的注入都在本函数内完成，不改
+ *      `evidenceFromFetch()` 签名（W-2）
+ *   3. 失败一律捕获并返回 null：存证是旁路，绝不因此让调用方拿不到
+ *      PageAudit（W-3），但也绝不假装存证成功
+ */
+async function recordAuditEvidence(
+  res: FetchResult,
+  inputUrl: string,
+  finalUrl: string
+): Promise<AuditEvidenceRecord | null> {
+  if (!evidenceEnabled()) return null;
+
+  try {
+    // subject / source 一律取 finalUrl：观测的是最终被分析的页面。
+    // 输入 URL 只作为上下文留在 metadata.extra.inputUrl —— 重定向场景下
+    // 二者可能不同源，混成一个 identity 会让时间线接不上。
+    const patched: FetchResult = {
+      ...res,
+      context: {
+        ...res.context,
+        subject: siteSubject(finalUrl),
+        source: httpSource(finalUrl),
+        meta: { ...(res.context.meta ?? {}), inputUrl },
+      },
+    };
+
+    const ev = evidenceFromFetch(patched, "page_html");
+
+    // ★ 兜底修正（S1 已知缺陷，本轮不改动 S1 代码）：
+    //   evidenceFromFetch 把 identity 交给 normalizeEvidence，而后者在记录
+    //   缺少 provenance 时判定为「旧契约」，改用 `target`（输入 URL）重新推导，
+    //   于是上面注入的 subject 被静默覆盖。这里补回 finalUrl 版本。
+    ev.subject = siteSubject(finalUrl);
+    ev.source = httpSource(finalUrl);
+    // 同一个判定也会给新记录打上 migratedFrom —— 一条刚生成的证据不该
+    // 自称是迁移产物，那会让存量统计失真。
+    ev.migratedFrom = undefined;
+
+    // OPEN-3：audit 通道的 Evidence 必须可重放。只有 hash 没有正文，
+    // Observer 无从算出任何结论 —— 那种 Evidence 等于没存。
+    //
+    // 判据是「拿到了响应」而不是「正文非空」：200 但空 body 也是一种真实
+    // 的观测结果，它必须能被 Observer 判成 PARTIAL，而不是被当成没存正文
+    // 直接拒收。响应体为空时没有 blob 可写，bodyRef 保持 null。
+    const body = res.body;
+    if (res.status > 0 || body.length > 0) ev.response.bodyRetained = true;
+
+    const store = createStore();
+    const saved = await store.saveEvidence(ev, body ? { body } : undefined);
+    return { id: saved.id, evidence: ev, store, body };
+  } catch (e) {
+    console.error(
+      "[geokit] audit Evidence 落盘失败，本次审计无存证：",
+      e instanceof Error ? e.message : e
+    );
+    return null;
+  }
 }
 
 function normalizeUrl(u: string): string {
