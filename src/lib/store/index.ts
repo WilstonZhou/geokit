@@ -8,6 +8,7 @@
 import { join } from "node:path";
 
 import { JsonlStore } from "./jsonl";
+import { SqliteStore } from "./sqlite";
 import type { Store } from "./types";
 
 /**
@@ -26,10 +27,29 @@ export function storeRoot(): string {
   );
 }
 
-export function createStore(root: string = storeRoot()): Store {
-  return new JsonlStore(root);
+/**
+ * 存储驱动（Phase 1 S8）。
+ *
+ * ★ 默认仍是 `jsonl` —— 换实现不改变任何既有行为，S3–S7 的代码与数据
+ *   全部照旧。要用 SQLite 必须显式设置 `GEOKIT_STORE_DRIVER=sqlite`。
+ *
+ * 这就是「先定接口、后换实现」的兑现：存储选型因此是**可逆**的，
+ * 不是一次性赌博。
+ */
+export type StoreDriver = "jsonl" | "sqlite";
+
+export function storeDriver(): StoreDriver {
+  const v = (process.env.GEOKIT_STORE_DRIVER ?? "jsonl").toLowerCase();
+  return v === "sqlite" ? "sqlite" : "jsonl";
 }
 
-export { JsonlStore };
+export function createStore(
+  root: string = storeRoot(),
+  driver: StoreDriver = storeDriver()
+): Store {
+  return driver === "sqlite" ? new SqliteStore(root) : new JsonlStore(root);
+}
+
+export { JsonlStore, SqliteStore };
 export * from "./types";
 export * from "./retention";

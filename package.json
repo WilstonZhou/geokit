@@ -36,6 +36,7 @@
     "test:ai-observer": "tsx scripts/test-ai-observer.ts",
     "test:diff": "tsx scripts/test-diff.ts",
     "test:observation-api": "tsx scripts/test-observation-api.ts",
+    "test:sqlite-store": "tsx scripts/test-sqlite-store.ts",
     "mcp": "tsx scripts/mcp-stdio.ts"
   },
   "dependencies": {
