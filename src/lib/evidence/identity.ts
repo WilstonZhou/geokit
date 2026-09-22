@@ -227,7 +227,11 @@ export function parseSource(source: string): ParsedSource | null {
  */
 export const SERP_STRATEGY_VERSIONS: Record<string, string> = {
   baidu: "baidu-mu@1",
+  // 360 的引擎 id 是 `so360`（见 engines.ts），早期记录里也存在 "360" 的写法。
+  // 两个 key 都指向同一策略：少任何一个，360 的解析口径就无从追踪 ——
+  // 而它恰恰是最容易因页面改版而失效的一家。
   "360": "so360-data-mdurl@1",
+  so360: "so360-data-mdurl@1",
   sogou: "sogou-citeLinkClass@1",
 };
 

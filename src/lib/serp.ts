@@ -11,7 +11,12 @@
 
 import { ENGINES, type EngineId, type SearchEngine } from "./engines";
 import { findTags, stripTags, getDomain, decodeEntities, absolutize } from "./html";
-import { fetchWithPolicy } from "./fetcher";
+import { fetchWithPolicy, type FetchResult } from "./fetcher";
+import { evidenceFromFetch, evidenceEnabled } from "./evidence/store";
+import { createStore, type Store } from "./store";
+import { searchSubject, searchEngineSource } from "./evidence/identity";
+import { recordSearchObservation } from "./observers/search";
+import type { Evidence } from "./evidence/types";
 
 export type SerpStatus = "ok" | "blocked" | "no_results" | "error";
 
@@ -50,6 +55,92 @@ export interface SerpResponse {
 
 const FETCH_TIMEOUT_MS = 12_000;
 
+/** 一次 SERP 采集的存证结果 */
+interface SerpEvidenceRecord {
+  id: string;
+  evidence: Evidence;
+  /** 复用同一实例，避免 JsonlStore 的惰性索引被重复构建 */
+  store: Store;
+  body: string;
+}
+
+interface SerpFetchOutcome {
+  html: string;
+  record: SerpEvidenceRecord | null;
+}
+
+/**
+ * 采集失败时也要带上存证结果 —— 被限流本身就是需要留痕的事实，
+ * 否则「这一小时一直被百度挡着」这种信息会永远丢失。
+ */
+class SerpFetchError extends Error {
+  constructor(
+    message: string,
+    readonly record: SerpEvidenceRecord | null
+  ) {
+    super(message);
+    this.name = "SerpFetchError";
+  }
+}
+
+/**
+ * 把一次 SERP 采集落成 `serp_html` Evidence —— S4 Search Observer 的输入。
+ *
+ * 只做事实留存，不产出任何结论。三条边界与 S3 一致：
+ *   1. 总闸沿用 `GEOKIT_EVIDENCE`（默认 off），默认行为零变化
+ *   2. identity 注入在本函数内完成，不改 `evidenceFromFetch()` 签名
+ *   3. 失败捕获返回 null：存证是旁路，绝不因此让调用方拿不到排名结果
+ */
+async function recordSerpEvidence(
+  res: FetchResult,
+  engineId: EngineId,
+  keyword: string,
+  targetDomain?: string
+): Promise<SerpEvidenceRecord | null> {
+  if (!evidenceEnabled()) return null;
+
+  try {
+    // subject = 被观测对象（站点 + 关键词）；source = 观测来源（引擎）。
+    // 引擎刻意不进 subject —— 它属于 source，混进去会让同一对象在不同
+    // 引擎下的历史被拆成互不相干的两条时间线。
+    const patched: FetchResult = {
+      ...res,
+      context: {
+        ...res.context,
+        subject: searchSubject(targetDomain, keyword),
+        source: searchEngineSource(engineId),
+      },
+    };
+
+    const ev = evidenceFromFetch(patched, "serp_html");
+
+    // ★ 兜底修正（S1 已知缺陷，本轮不改动 S1 代码）：
+    //   normalizeEvidence 会把缺 provenance 的记录判为旧契约，并用
+    //   `target`（此处是引擎 id）重新推导，从而覆盖上面注入的 subject。
+    //   这里补回 canonical 版本，与 S3 的处理保持一致。
+    ev.subject = searchSubject(targetDomain, keyword);
+    ev.source = searchEngineSource(engineId);
+    ev.migratedFrom = undefined;
+
+    // 与 S3 同构：拿到了响应就标记正文已留存，保证 Observer 可重放。
+    // （设计稿 D7 建议 SERP 默认 hash-only，但那与「结论必须能指回可重放
+    //   素材」直接冲突 —— hash-only 下 S4 永远产不出结论。这里改为留存正文，
+    //   磁盘代价由 GEOKIT_EVIDENCE 总闸控制，默认关闭。）
+    const body = res.body;
+    if (res.status > 0 || body.length > 0) ev.response.bodyRetained = true;
+
+    const store = createStore();
+    const saved = await store.saveEvidence(ev, body ? { body } : undefined);
+    return { id: saved.id, evidence: ev, store, body };
+  } catch (e) {
+    console.error(
+      "[geokit] SERP Evidence 落盘失败，本次无存证：",
+      e instanceof Error ? e.message : e
+    );
+    return null;
+  }
+}
+
 async function fetchHtml(
   url: string,
   engine: SearchEngine,
@@ -59,7 +150,7 @@ async function fetchHtml(
    */
   keyword = "",
   targetDomain?: string
-): Promise<string> {
+): Promise<SerpFetchOutcome> {
   const r = await fetchWithPolicy({
     url,
     timeoutMs: FETCH_TIMEOUT_MS,
@@ -77,9 +168,16 @@ async function fetchHtml(
     // 单次并发请求不受影响；只有对同一引擎连续高频请求才会被节流。
   });
 
-  // 与历史实现完全一致：非 2xx 抛错，由 fetchSerp 捕获后返回 blocked
-  if (!r.ok) throw new Error(r.error?.kind === "http_error" ? `HTTP ${r.status}` : (r.error?.message ?? "请求失败"));
-  return r.body;
+  // 与历史实现完全一致：非 2xx 抛错，由 fetchSerp 捕获后返回 blocked。
+  // 唯一区别是抛错前先把这次采集存证 —— 挡我们的那一页也是有价值的证据。
+  const record = await recordSerpEvidence(r, engine.id, keyword, targetDomain);
+  if (!r.ok) {
+    throw new SerpFetchError(
+      r.error?.kind === "http_error" ? `HTTP ${r.status}` : (r.error?.message ?? "请求失败"),
+      record
+    );
+  }
+  return { html: r.body, record };
 }
 
 /** 单容器允许的最大内容长度，超过说明标签嵌套被错配 */
@@ -404,22 +502,49 @@ export async function fetchSerp(
   };
 
   const all: SerpResultItem[] = [];
+  /** 本次采集落成的 serp_html Evidence（多页时按页序累积） */
+  const evidences: Evidence[] = [];
+  let store: Store | null = null;
+
+  /**
+   * 把结果落成 rank Observation（S4）。
+   *
+   * 只有 Evidence 真的落盘了才产结论；失败只记日志，绝不阻断 SerpResponse
+   * 返回，也绝不把「没存上」说成「观测成功」。
+   */
+  const emitObservation = async (response: SerpResponse): Promise<void> => {
+    if (!store || evidences.length === 0) return;
+    const r = await recordSearchObservation(store, { evidences, response, targetDomain });
+    if (!r.ok) console.error("[geokit] Search Observation 未生成：", r.reason);
+  };
 
   for (let p = 0; p < pages; p++) {
     const url = engine.searchUrl(keyword, p * engine.resultsPerPage);
     let html = "";
     try {
-      html = await fetchHtml(url, engine, keyword, targetDomain);
+      const got = await fetchHtml(url, engine, keyword, targetDomain);
+      html = got.html;
+      if (got.record) {
+        evidences.push(got.record.evidence);
+        store = got.record.store;
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      const rec = e instanceof SerpFetchError ? e.record : null;
+      if (rec) {
+        evidences.push(rec.evidence);
+        store = rec.store;
+      }
       base.elapsedMs = Date.now() - started;
-      return {
+      const blocked: SerpResponse = {
         ...base,
         status: "blocked",
         note: isAbort(msg)
           ? `采集超时（${FETCH_TIMEOUT_MS / 1000}s）。${engine.name}对直连采集有风控，生产环境建议走住宅代理或在服务端配置 "${engine.name.toUpperCase()}_PROXY"。`
           : `请求失败：${msg}。${engine.name}可能会拦截服务端直连请求，生产环境建议配置代理。`,
       };
+      await emitObservation(blocked);
+      return blocked;
     }
 
     const partials = extractItems(html, engine, engine.searchUrl("", 0));
@@ -460,14 +585,18 @@ export async function fetchSerp(
   base.elapsedMs = Date.now() - started;
 
   if (deduped.length === 0) {
-    return {
+    const noResults: SerpResponse = {
       ...base,
       status: "no_results",
       note: `未从 ${engine.name} 的返回页中解析出结果条目。该引擎的页面结构可能已改版，或返回的是验证页。GEOkit 宁可如实返回空，也不编造排名。`,
     };
+    await emitObservation(noResults);
+    return noResults;
   }
 
-  return { ...base, items: deduped, targetRank, targetFound: targetRank !== null };
+  const ok: SerpResponse = { ...base, items: deduped, targetRank, targetFound: targetRank !== null };
+  await emitObservation(ok);
+  return ok;
 }
 
 function isAbort(msg: string): boolean {
