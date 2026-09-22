@@ -1,0 +1,16 @@
+{
+  "name": "geokit-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GEOkit 命令行入口 —— 独立于 Web，CI 可直接冷启动调用",
+  "license": "MIT",
+  "bin": {
+    "geokit": "./src/bin.ts"
+  },
+  "scripts": {
+    "geokit": "tsx src/bin.ts"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  }
+}

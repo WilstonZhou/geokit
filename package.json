@@ -38,6 +38,8 @@
     "test:observation-api": "tsx scripts/test-observation-api.ts",
     "test:sqlite-store": "tsx scripts/test-sqlite-store.ts",
     "test:diagnosis": "tsx scripts/test-diagnosis.ts",
+    "test:cli": "tsx scripts/test-cli.ts",
+    "cli": "tsx packages/cli/src/bin.ts",
     "mcp": "tsx scripts/mcp-stdio.ts"
   },
   "dependencies": {
