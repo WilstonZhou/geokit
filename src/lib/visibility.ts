@@ -30,6 +30,8 @@ import { createHash } from "node:crypto";
 
 import { fetchWithPolicy, type FetchPurpose, type FetchResult } from "./fetcher";
 import type { AiObservationStatus, Confidence } from "./evidence/types";
+import { aiSlotSubject, providerSource } from "./evidence/identity";
+import { summarizeAiStatuses, visibilityScoreOf, type AiStatusSummary } from "./evidence/ai-status";
 import { recordFetch } from "./evidence/store";
 
 const AI_TIMEOUT_MS = 30_000;
@@ -254,6 +256,14 @@ export interface VisibilityReport {
   failedCount: number;
   /** 未配置 key 的探针数 */
   unobservableCount: number;
+  /**
+   * Phase 1 S1：六态精确计数。唯一口径定义处是 `evidence/ai-status.ts`。
+   *
+   * 加它的原因：`observedCount` 一个字段扛两种语义（拿到响应 / 可判定），
+   * INDETERMINATE 出现后就分叉了。从此命中率分母只看
+   * `statusCounts.determinableCount`，旧字段仅作兼容保留。
+   */
+  statusCounts: AiStatusSummary;
   /** 被多个模型共同引用的域名 —— 这是值得投放的“权威信源池” */
   topCitedDomains: { domain: string; count: number }[];
   parserVersion: string;
@@ -479,7 +489,12 @@ async function callProvider(p: AiProvider, key: string, prompt: string): Promise
     method: "POST" as const,
     timeoutMs: AI_TIMEOUT_MS,
     purpose: "ai-visibility" as FetchPurpose,
+    // @deprecated 保留给 Phase 0 读者：ai 通道的 target 是「来源」不是「被观测对象」
     target: p.id,
+    // ★ 观测对象 = 槽位（provider + requestedModel），**不是** servedModel。
+    // 详见 identity.aiSlotSubject：厂商改路由不该切断历史时间线。
+    subject: aiSlotSubject(p.id, p.apiModel),
+    source: providerSource(p.id),
     meta: { providerId: p.id, requestedModel: p.apiModel },
     // AI 厂商侧有各自的配额控制；本项目不做额外限速，也不重试 —— 重试
     // 会把一次配额消耗放大成 N 次，且你无法从结果里看出来。
@@ -640,13 +655,11 @@ export function buildVisibilityReport(
   topic: string,
   probes: VisibilityProbe[]
 ): VisibilityReport {
-  // 只有真正观测到的探针才能进分母。
-  // 把「配置过 key 但被限流了」也算进分母，会让命中率看起来比真实情况好。
-  const observed = probes.filter(
-    (p) => p.status === "MENTIONED" || p.status === "NOT_MENTIONED"
-  );
+  // 只有**可判定**的探针才能进分母。
+  // 把「配置过 key 但被限流了」也算进分母，会让命中率看起来比真实情况好；
+  // 把 INDETERMINATE（模型拒答）也算进去，则会把「厂商不肯说」记成「厂商不知道」。
+  const summary = summarizeAiStatuses(probes.map((p) => p.status));
   const mentioned = probes.filter((p) => p.status === "MENTIONED");
-  const failed = probes.filter((p) => p.status === "BLOCKED" || p.status === "ERROR");
   const unobservable = probes.filter((p) => p.status === "UNOBSERVABLE");
   const configuredCount = probes.length - unobservable.length;
 
@@ -668,15 +681,15 @@ export function buildVisibilityReport(
     prompt: prompt.text,
     promptVersion: prompt.version,
     probes,
-    visibilityScore:
-      observed.length === 0
-        ? 0
-        : Math.round((mentioned.length / observed.length) * 100),
-    observedCount: observed.length,
+    // 分母恒为 determinableCount —— 与 statusCounts 同源，不会再各自漂移
+    visibilityScore: visibilityScoreOf(summary),
+    /** @deprecated 兼容字段，恒等于 statusCounts.determinableCount */
+    observedCount: summary.determinableCount,
     configuredCount,
     mentionedCount: mentioned.length,
-    failedCount: failed.length,
+    failedCount: summary.blockedCount + summary.errorCount,
     unobservableCount: unobservable.length,
+    statusCounts: summary,
     topCitedDomains,
     parserVersion: AI_VISIBILITY_PARSER_VERSION,
     requestParams: { ...SAMPLING_PROFILE },

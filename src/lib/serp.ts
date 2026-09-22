@@ -50,7 +50,16 @@ export interface SerpResponse {
 
 const FETCH_TIMEOUT_MS = 12_000;
 
-async function fetchHtml(url: string, engine: SearchEngine): Promise<string> {
+async function fetchHtml(
+  url: string,
+  engine: SearchEngine,
+  /**
+   * 仅用于 provenance（Phase 1 subject 需要它）。不参与任何请求构造或解析，
+   * 不传也不影响抓取与排名结果。
+   */
+  keyword = "",
+  targetDomain?: string
+): Promise<string> {
   const r = await fetchWithPolicy({
     url,
     timeoutMs: FETCH_TIMEOUT_MS,
@@ -61,8 +70,9 @@ async function fetchHtml(url: string, engine: SearchEngine): Promise<string> {
       "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     },
     purpose: "serp",
+    // @deprecated 保留给 Phase 0 读者：serp 通道的 target 是「来源」不是「被观测对象」
     target: engine.id,
-    meta: { engineId: engine.id },
+    meta: { engineId: engine.id, keyword, ...(targetDomain ? { siteUrl: targetDomain } : {}) },
     // 启用 per-domain 限速（默认策略）。五个引擎域名互不相同，桶各自独立，
     // 单次并发请求不受影响；只有对同一引擎连续高频请求才会被节流。
   });
@@ -399,7 +409,7 @@ export async function fetchSerp(
     const url = engine.searchUrl(keyword, p * engine.resultsPerPage);
     let html = "";
     try {
-      html = await fetchHtml(url, engine);
+      html = await fetchHtml(url, engine, keyword, targetDomain);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       base.elapsedMs = Date.now() - started;

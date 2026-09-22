@@ -30,6 +30,7 @@
     "start": "next start -p 3210",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "test:store": "tsx scripts/test-store.ts",
     "mcp": "tsx scripts/mcp-stdio.ts"
   },
   "dependencies": {

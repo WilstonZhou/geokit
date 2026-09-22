@@ -56,8 +56,23 @@ export interface FetchRequest {
   readBody?: boolean;
   rateLimit?: RateLimitPolicy | false;
   purpose: FetchPurpose;
-  /** 业务对象标识，进入 provenance（如被审计的站点、搜索的引擎） */
+  /**
+   * 业务对象标识，进入 provenance（如被审计的站点、搜索的引擎）。
+   *
+   * @deprecated Phase 1 S1 起语义分裂：serp/ai 通道存的是「来源」，
+   * audit/llms 通道存的是「被观测对象」。新代码一律用 subject / source。
+   * 保留它只为兼容 Phase 0 读者。
+   */
   target?: string;
+  /**
+   * canonical 被观测对象（Phase 1）。例：`site:https://x.com`、`ai-slot:deepseek:deepseek-chat`。
+   * 缺省时由 evidence 归一化层按 purpose + target + meta 推导。
+   */
+  subject?: string;
+  /** canonical 观测来源（Phase 1）。例：`search-engine:baidu`、`provider:deepseek` */
+  source?: string;
+  /** 观测批次 id。去重与「重算 vs 新观测」的判定依据 */
+  runId?: string;
   meta?: Record<string, string | number | boolean | undefined>;
 }
 
@@ -95,7 +110,11 @@ export interface FetchResult {
   };
   context: {
     purpose: FetchPurpose;
+    /** @deprecated 语义分裂，见 FetchRequest.target */
     target?: string;
+    subject?: string;
+    source?: string;
+    runId?: string;
     requestedAt: string;
     meta?: Record<string, string | number | boolean | undefined>;
   };
@@ -259,6 +278,9 @@ export async function fetchWithPolicy(req: FetchRequest): Promise<FetchResult> {
         context: {
           purpose: req.purpose,
           target: req.target,
+          subject: req.subject,
+          source: req.source,
+          runId: req.runId,
           requestedAt,
           meta: req.meta,
         },
@@ -319,6 +341,9 @@ function failResult(
     context: {
       purpose: req.purpose,
       target: req.target,
+      subject: req.subject,
+      source: req.source,
+      runId: req.runId,
       requestedAt,
       meta: req.meta,
     },

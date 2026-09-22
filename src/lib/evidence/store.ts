@@ -18,9 +18,11 @@ import { appendFileSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { FetchResult, FetchPurpose } from "../fetcher";
-import type { RawEvidence, RawEvidenceKind } from "./types";
+import type { Evidence, EvidenceMetadata, RawEvidence, RawEvidenceKind } from "./types";
 import { EVIDENCE_CONTRACT_VERSION } from "./types";
 import { redactUrl } from "./redact";
+import { deriveSubjectSource, normalizeEvidence } from "./normalize";
+import { serpStrategyVersion } from "./identity";
 
 type BodyMode = "on" | "hash-only" | "off";
 
@@ -54,12 +56,19 @@ function evidenceId(): string {
 }
 
 /**
- * ★ 从 FetchResult 构造 RawEvidence —— 这是 Fetcher → Evidence 的唯一通道。
+ * ★ 从 FetchResult 构造 Evidence —— 这是 Fetcher → Evidence 的唯一通道。
  *
  * 不存在「给个 URL 帮我存一下」这种接口，因为那会让 Evidence 越过
  * Fetcher 自己去采集。契约上必须杜绝这种可能。
+ *
+ * Phase 1 S1：返回值同时含 canonical 字段（subject/source/provenance/…）
+ * 与 Phase 0 旧字段（target/request/response/…）。旧读者行为零变化。
+ *
+ * subject / source 优先取调用方显式传入的值；没有则由
+ * `deriveSubjectSource()` 按 purpose 推导 —— 这样 serp / ai 通道即使
+ * 不改调用点，也能拿到正确的（而非语义分裂的）identity。
  */
-export function evidenceFromFetch(res: FetchResult, kind: RawEvidenceKind): RawEvidence {
+export function evidenceFromFetch(res: FetchResult, kind: RawEvidenceKind): Evidence {
   const mode = bodyMode();
   const retain = mode === "on" && res.body.length > 0;
   const id = evidenceId();
@@ -70,7 +79,23 @@ export function evidenceFromFetch(res: FetchResult, kind: RawEvidenceKind): RawE
     bodyRef = join(blobDir, `${id}.txt`);
   }
 
-  return {
+  const purpose = res.context.purpose as FetchPurpose;
+  const engine =
+    typeof res.context.meta?.engineId === "string" ? res.context.meta.engineId : undefined;
+  const meta = res.context.meta ?? {};
+
+  const identity = res.context.subject && res.context.source
+    ? { subject: res.context.subject, source: res.context.source }
+    : deriveSubjectSource({
+        kind,
+        purpose,
+        target: res.context.target,
+        requestUrl: res.request.url,
+        finalUrl: res.finalUrl,
+        meta: meta as Record<string, unknown>,
+      });
+
+  const legacy: RawEvidence = {
     id,
     contractVersion: EVIDENCE_CONTRACT_VERSION,
     kind,
@@ -97,13 +122,31 @@ export function evidenceFromFetch(res: FetchResult, kind: RawEvidenceKind): RawE
       attempts: res.attempts.length,
     },
     context: {
-      purpose: res.context.purpose as FetchPurpose,
-      engine: typeof res.context.meta?.engineId === "string" ? res.context.meta.engineId : undefined,
-      meta: res.context.meta,
+      purpose,
+      engine,
+      meta,
     },
     error: res.error ? { kind: res.error.kind, message: res.error.message } : undefined,
     createdAt: new Date().toISOString(),
   };
+
+  const metadata: EvidenceMetadata = {
+    purpose,
+    engine,
+    strategyVersion: purpose === "serp" ? serpStrategyVersion(engine) : undefined,
+    requestedModel: typeof meta.requestedModel === "string" ? meta.requestedModel : undefined,
+    servedModel: typeof meta.servedModel === "string" ? meta.servedModel : undefined,
+    extra: meta,
+  };
+
+  // 走归一化是为了让 canonical 字段的填充规则只有一处实现
+  return normalizeEvidence({
+    ...legacy,
+    subject: identity.subject,
+    source: identity.source,
+    runId: res.context.runId,
+    metadata,
+  });
 }
 
 /** 追加写一条证据。不可变 —— 没有 update，没有 delete。 */

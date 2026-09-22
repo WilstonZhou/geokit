@@ -246,9 +246,16 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
         visibilityScore: report.visibilityScore,
         configuredCount: report.configuredCount,
         mentionedCount: report.mentionedCount,
+        /** @deprecated 兼容字段，等于 statusCounts.determinableCount */
         observedCount: report.observedCount,
         failedCount: report.failedCount,
         unobservableCount: report.unobservableCount,
+        /**
+         * Phase 1 S1 六态精确计数。
+         * attempted → successful → determinable 是三层漏斗：
+         * 拿到响应 ≠ 能下结论。只看 observedCount 会把「模型拒答」误记成「没提及」。
+         */
+        statusCounts: report.statusCounts,
         topCitedDomains: report.topCitedDomains,
         /**
          * 可复现性上下文。没有它，Agent 拿到的分数无法判断可信边界：
@@ -262,7 +269,8 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
           ...samplingProfile(),
         },
         note:
-          "visibilityScore 的分母是实际观测成功的探针数（observedCount），BLOCKED/ERROR/UNOBSERVABLE 不计入。" +
+          "visibilityScore 的分母是**可判定**探针数（statusCounts.determinableCount = MENTIONED + NOT_MENTIONED）；" +
+          "INDETERMINATE（模型拒答/答非所问）、BLOCKED、ERROR、UNOBSERVABLE 均不计入。" +
           "open-seo 仅覆盖 ChatGPT/Claude/Gemini/Perplexity；GEOkit 额外覆盖 DeepSeek、豆包、Kimi、通义、文心、元宝。",
         probes: report.probes.map((p) => ({
           provider: p.providerName,
