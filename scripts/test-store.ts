@@ -22,7 +22,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { JsonlStore } from "../src/lib/store/jsonl";
-import type { EvidenceQuery, ObservationQuery } from "../src/lib/store/types";
 import { DEFAULT_RETENTION_POLICY, planRetention, retentionClassOf } from "../src/lib/store/retention";
 import type { Evidence, Observation } from "../src/lib/evidence/types";
 import { EVIDENCE_CONTRACT_VERSION, OBSERVATION_CONTRACT_VERSION } from "../src/lib/evidence/types";
@@ -424,7 +423,7 @@ async function main(): Promise<void> {
   eq("① 重算不新建 replaces 关系", (await store.getObservation(rp1.id))?.replaces, undefined);
   eq("① 重算不新增历史", (await store.findObservationsBySubject(rpSubject)).length, 1);
 
-  const rp1c = await store.saveObservation(obs({ ...rpBase, parserVersion: "p@1", observedAt: "2026-09-24T01:00:00.000Z", result: { rank: 7 } }));
+  await store.saveObservation(obs({ ...rpBase, parserVersion: "p@1", observedAt: "2026-09-24T01:00:00.000Z", result: { rank: 7 } }));
   eq("① 再重算一次仍无 replaces（链不增长）", (await store.getObservation(rp1.id))?.replaces, undefined);
   eq("① 三次重算后历史仍为 1 条", (await store.findObservationsBySubject(rpSubject)).length, 1);
 

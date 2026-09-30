@@ -3,15 +3,47 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '4cf06090-50cc-45e4-beb1-ffb3a44efdda'
-  PropagateID: '4cf06090-50cc-45e4-beb1-ffb3a44efdda'
-  ReservedCode1: '05361384-df8f-4b75-9eb2-68dfaa762101'
-  ReservedCode2: '05361384-df8f-4b75-9eb2-68dfaa762101'
+  ProduceID: '59d8d2b4-fdc7-45f9-8a52-a83a19992b08'
+  PropagateID: '59d8d2b4-fdc7-45f9-8a52-a83a19992b08'
+  ReservedCode1: '27bff339-e39a-4465-bc8d-e9e60b1fd285'
+  ReservedCode2: '27bff339-e39a-4465-bc8d-e9e60b1fd285'
 ---
 
 # 变更日志
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
+
+## [修复] — 2026-09-30 · lint 链路修复（Next 16 移除 next lint）
+
+**问题**：`package.json` 的 `lint` 脚本指向 `next lint`，但 Next.js 16 已移除该命令
+（实测报错退出码 1）。项目此前无 ESLint 配置、CI 未跑 lint，缺陷一直未暴露。
+
+**修复**：
+
+- 新增 devDependencies：`eslint`、`eslint-config-next`、`@eslint/eslintrc`
+  （仅开发依赖，运行时直接依赖仍为 4 个）
+- 新增 `eslint.config.mjs`（flat config，走 `eslint-config-next/core-web-vitals`
+  + `typescript` 子路径导出；`_` 前缀参数视为刻意预留位）
+- `lint` 脚本改为 `eslint .`
+
+**清零的 11 处问题**（1 error + 10 warning）：
+
+| 位置 | 问题 | 处置 |
+| --- | --- | --- |
+| `llms.ts:278` | prefer-const（唯一 error） | `let` → `const` |
+| `fetcher/index.ts` | 未使用函数 `hostOf` | 删除 |
+| `diagnosis/index.ts` | 冗余导入 `FIX_RULES`/`FixRule` | 精简 import |
+| `audit.ts:322` | 三元表达式作语句 | 改 if/else |
+| `regression.ts` | `snapEngine` 冗余参数 `keyword` | 删参数及 3 处调用实参 |
+| `test-sarif.ts:17` | 未使用导入 `snapshotOf` | 删除 |
+| `test-store.ts` | 未使用类型导入 + `rp1c` 死赋值 | 删除 |
+| `rate-limit.ts:33` | `_host` 刻意预留参数 | 规则层豁免（`^_` 前缀） |
+
+**验证**：lint 0/0；typecheck 0 error；test:store 116、test:sarif 52、
+test:diagnosis 63、test:cli 69 全过；regression 与 baseline 完全一致
+（百度 21 / 360 4 / 搜狗 9，SEO 91 / GEO 70）；生产构建成功。
+
+---
 
 ## [决策] — 2026-09-22 · 数据源强制原则（全局）
 

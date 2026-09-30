@@ -275,7 +275,7 @@ export interface LlmsTxtAnalysis {
 }
 
 export async function analyzeLlmsTxt(inputUrl: string): Promise<LlmsTxtAnalysis> {
-  let robotsBase = inputUrl.startsWith("http") ? inputUrl : `https://${inputUrl}`;
+  const robotsBase = inputUrl.startsWith("http") ? inputUrl : `https://${inputUrl}`;
   let url = `${robotsBase}/llms.txt`;
   try {
     const u = new URL(robotsBase);

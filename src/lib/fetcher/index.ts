@@ -124,14 +124,6 @@ export interface FetchResult {
 export const DEFAULT_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36";
 
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return "unknown";
-  }
-}
-
 function sha256(s: string): string {
   return createHash("sha256").update(s, "utf8").digest("hex").slice(0, 32);
 }

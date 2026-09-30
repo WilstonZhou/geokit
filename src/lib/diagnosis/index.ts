@@ -13,8 +13,8 @@
  */
 import type { PageAudit } from "../audit";
 
-import { FIX_RULES, findFixRule, mapCheck, severityOf } from "./rules";
-import type { DiagnoseInput, Diagnosis, FixContext, FixRule } from "./types";
+import { findFixRule, mapCheck, severityOf } from "./rules";
+import type { DiagnoseInput, Diagnosis, FixContext } from "./types";
 
 export type { Diagnosis, FixContext, FixRule, Severity } from "./types";
 export { FIX_RULES, severityOf } from "./rules";

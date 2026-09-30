@@ -29,7 +29,7 @@ interface EngineSnapshot {
   malformedDomains: string[];
 }
 
-function snapEngine(id: EngineId, keyword: string): EngineSnapshot | { engineId: string; error: string } {
+function snapEngine(id: EngineId): EngineSnapshot | { engineId: string; error: string } {
   const htmlPath = join(FIX_DIR, `${id}.html`);
   if (!existsSync(htmlPath)) return { engineId: id, error: "fixture 缺失" };
 
@@ -70,9 +70,9 @@ function buildBaseline() {
   const out = {
     generatedAt: new Date().toISOString(),
     serp: {
-      baidu: snapEngine("baidu", "跨境支付"),
-      so360: snapEngine("so360", "跨境支付"),
-      sogou: snapEngine("sogou", "跨境支付"),
+      baidu: snapEngine("baidu"),
+      so360: snapEngine("so360"),
+      sogou: snapEngine("sogou"),
     },
     audit: snapAudit(),
   };
@@ -114,7 +114,7 @@ function checkBaseline() {
   const notes: string[] = [];
 
   for (const id of ["baidu", "so360", "sogou"] as EngineId[]) {
-    const cur = snapEngine(id, "跨境支付") as EngineSnapshot;
+    const cur = snapEngine(id) as EngineSnapshot;
     const pre = base.serp[id] as EngineSnapshot;
     if (!pre) continue;
 

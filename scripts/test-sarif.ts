@@ -14,7 +14,7 @@
 import { readFileSync } from "node:fs";
 
 import { buildCheckReport, checkHtml } from "../packages/cli/src/check";
-import { evaluateGate, snapshotOf, type GateSnapshot } from "../packages/cli/src/gate";
+import { evaluateGate, type GateSnapshot } from "../packages/cli/src/gate";
 import { OUTPUT_FORMATS, parseFormat, renderCheck, renderGate } from "../packages/cli/src/output";
 import {
   SARIF_SCHEMA,

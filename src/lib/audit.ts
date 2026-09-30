@@ -319,7 +319,8 @@ export function analyze(url: string, html: string, httpStatus: number, elapsedMs
     if (seenLinks.has(abs)) continue;
     seenLinks.add(abs);
     try {
-      new URL(abs).hostname === host ? internalLinks++ : externalLinks++;
+      if (new URL(abs).hostname === host) internalLinks++;
+      else externalLinks++;
     } catch {
       internalLinks++;
     }
