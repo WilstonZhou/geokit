@@ -18,6 +18,16 @@ import { httpSource, siteSubject } from "./evidence/identity";
 import type { Evidence } from "./evidence/types";
 import { createStore, type Store } from "./store";
 import { recordSiteObservation } from "./observers/site";
+import {
+  computeGeo,
+  type GeoVersion,
+  type GeeBreakdown,
+  type GeoResult,
+  type ContentShape,
+  type JsonLdInfo,
+} from "./geo";
+
+export type { GeoVersion, GeeBreakdown, GeoResult };
 
 export interface CheckResult {
   id: string;
@@ -29,14 +39,6 @@ export interface CheckResult {
   /** 具体到怎么改，不写正确的废话 */
   fix?: string;
   weight: number;
-}
-
-export interface GeeBreakdown {
-  id: string;
-  label: string;
-  score: number;
-  max: number;
-  comment: string;
 }
 
 export interface PageAudit {
@@ -69,6 +71,8 @@ export interface PageAudit {
   /** GEO：AI 引用友好度 */
   geoScore: number;
   geoBreakdown: GeeBreakdown[];
+  /** 评估所使用的 GEO 模型版本（如 "1.0.0" 或 "2.0.0"） */
+  geoVersion?: GeoVersion;
   recommendations: string[];
   /**
    * 本次审计对应的 `page_html` Evidence id（Phase 1 S3）。
@@ -80,23 +84,14 @@ export interface PageAudit {
   evidenceId?: string;
 }
 
-/** 结构化 OCR：这些是 LLM 最爱 cite 的内容形态 */
-interface ContentShape {
-  paragraphs: number;
-  lists: number;
-  listItems: number;
-  tables: number;
-  quotes: number;
-  codeBlocks: number;
-  dataPoints: number;
-  externalCitations: number;
-  hasTldr: boolean;
-  avgSentenceLength: number;
+export interface AuditOptions {
+  /** 指定 GEO 评分模型版本，默认 "1.0.0"（确保历史兼容性） */
+  geoVersion?: GeoVersion;
 }
 
 const FETCH_TIMEOUT_MS = 15_000;
 
-export async function auditUrl(inputUrl: string): Promise<PageAudit> {
+export async function auditUrl(inputUrl: string, opts?: AuditOptions): Promise<PageAudit> {
   const started = Date.now();
   const normalized = normalizeUrl(inputUrl);
 
@@ -244,7 +239,12 @@ function normalizeUrl(u: string): string {
  *   一个看起来合理、实则毫无依据的分数。抓不到就是抓不到，分数一律 0。
  *   算法本身与 Phase 0 完全一致，导出不改任何行为。
  */
-export function emptyAudit(url: string, error: string, ms: number): PageAudit {
+export function emptyAudit(
+  url: string,
+  error: string,
+  ms: number,
+  opts?: AuditOptions
+): PageAudit {
   return {
     url,
     finalUrl: url,
@@ -281,11 +281,19 @@ export function emptyAudit(url: string, error: string, ms: number): PageAudit {
     seoScore: 0,
     geoScore: 0,
     geoBreakdown: [],
+    geoVersion: opts?.geoVersion ?? "1.0.0",
     recommendations: ["先解决页面可访问性，无法抓取时其余评分无从谈起。"],
   };
 }
 
-export function analyze(url: string, html: string, httpStatus: number, elapsedMs: number): PageAudit {
+export function analyze(
+  url: string,
+  html: string,
+  httpStatus: number,
+  elapsedMs: number,
+  opts?: AuditOptions
+): PageAudit {
+  const geoVersion: GeoVersion = opts?.geoVersion ?? "1.0.0";
   const allMeta = getAllMeta(html);
   const title = getTitle(html);
   const desc = getMeta(html, "description");
@@ -333,7 +341,7 @@ export function analyze(url: string, html: string, httpStatus: number, elapsedMs
   }).length;
 
   const bodyText = extractBodyText(html);
-  const contentShape = analyzeContentShape(html, bodyText);
+  const contentShape = analyzeContentShape(html, bodyText, headings);
   const wordCount = countWords(bodyText);
 
   const hreflang = findTags(html, ["link"])
@@ -461,12 +469,21 @@ export function analyze(url: string, html: string, httpStatus: number, elapsedMs
   ];
 
   const seoScore = scoreFromChecks(checks);
-  const geo = computeGeo({
-    html, checks, contentShape, jsonLdTypes, allMeta,
-    wordCount, headings, lang, canonical, ld,
-  });
-
-  const recommendations = buildRecommendations(checks, geo);
+  const geo = computeGeo(
+    {
+      html,
+      checks,
+      contentShape,
+      jsonLdTypes,
+      allMeta,
+      wordCount,
+      headings,
+      lang,
+      canonical,
+      ld,
+    },
+    geoVersion
+  );
 
   return {
     url,
@@ -495,7 +512,8 @@ export function analyze(url: string, html: string, httpStatus: number, elapsedMs
     seoScore,
     geoScore: geo.total,
     geoBreakdown: geo.breakdown,
-    recommendations,
+    geoVersion: geo.version,
+    recommendations: geo.recommendations,
   };
 }
 
@@ -526,7 +544,11 @@ function countWords(text: string): number {
 }
 
 /** 分析内容形态 —— GEO 评分的核心输入 */
-function analyzeContentShape(html: string, text: string): ContentShape {
+function analyzeContentShape(
+  html: string,
+  text: string,
+  headings: { level: number; text: string }[] = []
+): ContentShape {
   const ul = findTags(html, ["ul", "ol"]).length;
   const li = findTags(html, ["li"]).length;
   const tables = findTags(html, ["table"]).length;
@@ -556,173 +578,42 @@ function analyzeContentShape(html: string, text: string): ContentShape {
     /(总结|核心结论|要点|综上|一句话|tldr|key takeaway| TL;?DR)/i.test(head) ||
     (dataPoints > 0 && head.length > 80);
 
-  return {
-    paragraphs, lists: ul, listItems: li, tables, quotes: blockquote,
-    codeBlocks: code, dataPoints, externalCitations, hasTldr, avgSentenceLength,
-  };
-}
+  // v2: 首屏直接回答
+  const hasDirectAnswer =
+    hasTldr ||
+    /(定义|简言之|简单来说|核心是|答案是|什么是|指的是|：|:\s*|is\s+a|refers\s+to|means)/i.test(head);
 
-interface GeoInput {
-  html: string;
-  checks: CheckResult[];
-  contentShape: ContentShape;
-  jsonLdTypes: string[];
-  allMeta: Record<string, string>;
-  wordCount: number;
-  headings: { level: number; text: string }[];
-  lang: string | null;
-  canonical: string | null;
-  ld: JsonLdInfo;
-}
+  // v2: HTML5 语义地标标签
+  const hasSemanticLandmarks = findTags(html, ["main", "article"]).length > 0;
 
-/**
- * GEO 评分 —— 「AI 愿意引用你吗」
- * 六个维度，权重合计 100。
- */
-function computeGeo(input: GeoInput): { total: number; breakdown: GeeBreakdown[] } {
-  const { contentShape: s, jsonLdTypes, allMeta, wordCount, checks } = input;
-
-  // 1. 可引用性 Quotability (25)
-  let quotability = 0;
-  if (s.hasTldr) quotability += 8;
-  if (s.lists > 0) quotability += Math.min(6, s.lists * 2);
-  if (s.listItems >= 5) quotability += 3;
-  if (s.tables > 0) quotability += Math.min(5, s.tables * 3);
-  if (s.dataPoints >= 3) quotability += 5;
-  else if (s.dataPoints > 0) quotability += 2;
-  if (s.quotes > 0) quotability += 2;
-  quotability = Math.min(25, quotability);
-
-  // 2. 结构化 Structuredness (20)
-  let structuredness = 0;
-  if (jsonLdTypes.length >= 3) structuredness += 8;
-  else if (jsonLdTypes.length > 0) structuredness += 4;
-  const hCounts = [1, 2, 3].map((l) => input.headings.filter((h) => h.level === l).length);
-  if (hCounts[0] >= 1) structuredness += 4;
-  if (hCounts[1] >= 3) structuredness += 4;
-  else if (hCounts[1] > 0) structuredness += 2;
-  if (s.paragraphs >= 5) structuredness += 2;
-  if (input.canonical) structuredness += 2;
-  structuredness = Math.min(20, structuredness);
-
-  // 3. 实体清晰度 Entity Clarity (15)
-  //    署名与日期既可能写在 meta 里，也可能写进 JSON-LD —— 两处都认。
-  let entity = 0;
-  if (jsonLdTypes.some((t) => /Organization|Corporation|LocalBusiness/i.test(t)) ||
-      input.ld.hasOrganization) entity += 4;
-  if (jsonLdTypes.some((t) => /Article|BlogPosting|NewsArticle|Product/i.test(t))) entity += 4;
-  if (allMeta.author || input.ld.hasAuthor) entity += 3;
-  if (allMeta["article:published_time"] || allMeta.date || allMeta.pubdate ||
-      input.ld.hasDatePublished) entity += 2;
-  if (input.ld.hasAuthor || jsonLdTypes.some((t) => /Person/i.test(t))) entity += 2;
-  entity = Math.min(15, entity);
-
-  // 4. 可抓取性 Crawlability (15)
-  const crawl = checks.find((c) => c.id === "robots");
-  let crawlability = 6;
-  if (crawl?.level === "fail") crawlability = 0;
-  if (input.lang) crawlability += 3;
-  if (input.canonical) crawlability += 2;
-  if (checks.find((c) => c.id === "http")?.level === "pass") crawlability += 2;
-  if (wordCount > 0) crawlability += 2;
-  crawlability = Math.min(15, crawlability);
-
-  // 5. 事实密度 Fact Density (15)
-  //    分母设 300 字下限，避免超短正文算出虚高的「每千字数据点」。
-  const density = s.dataPoints / (Math.max(wordCount, 300) / 1000);
-  let factDensity = 0;
-  if (wordCount >= 1200) factDensity += 4;
-  else if (wordCount >= 600) factDensity += 2;
-  if (density >= 3) factDensity += 6;
-  else if (density >= 1.5) factDensity += 4;
-  else if (density > 0) factDensity += 2;
-  if (s.externalCitations >= 3) factDensity += 5;
-  else if (s.externalCitations > 0) factDensity += 2;
-  // 正文过薄时，密度再高也不给它高分 —— 没什么可摘的
-  if (wordCount < 300) factDensity = Math.min(factDensity, 3);
-  factDensity = Math.min(15, factDensity);
-
-  // 6. 可读性 / 时效性 Readability & Freshness (10)
-  let readability = 0;
-  if (s.avgSentenceLength > 0 && s.avgSentenceLength <= 45) readability += 4;
-  else if (s.avgSentenceLength <= 70) readability += 2;
-  if (allMeta["article:modified_time"] || allMeta["og:updated_time"] || input.ld.hasDateModified)
-    readability += 3;
-  if (allMeta["article:published_time"] || input.ld.hasDatePublished) readability += 3;
-  readability = Math.min(10, readability);
-
-  const breakdown: GeeBreakdown[] = [
-    {
-      id: "quotability", label: "可引用性", score: quotability, max: 25,
-      comment: s.hasTldr
-        ? `有结论前置，检测到 ${s.dataPoints} 个数据点、${s.lists} 个列表${s.tables ? `、${s.tables} 张表格` : ""}`
-        : "缺少 TL;DR 式的结论前置，AI 难以抽取可引用的片段",
-    },
-    {
-      id: "structuredness", label: "结构化", score: structuredness, max: 20,
-      comment: jsonLdTypes.length
-        ? `检测到 ${jsonLdTypes.length} 类 schema`
-        : "无 JSON-LD，AI 无法确认页面实体类型",
-    },
-    {
-      id: "entity", label: "实体清晰度", score: entity, max: 15,
-      comment: entity >= 10 ? "作者/组织/时间标注较完整" : "缺少作者或组织署名，影响了权威性判断",
-    },
-    {
-      id: "crawlability", label: "可抓取性", score: crawlability, max: 15,
-      comment: crawl?.level === "fail" ? "noindex 会让 AI 完全看不到这个页面" : "抓取通道正常",
-    },
-    {
-      id: "density", label: "事实密度", score: factDensity, max: 15,
-      comment: `每千字 ${density.toFixed(1)} 个数据点，外链引用 ${s.externalCitations} 处`,
-    },
-    {
-      id: "readability", label: "可读性/时效", score: readability, max: 10,
-      comment: `平均句长 ${s.avgSentenceLength} 字${allMeta["article:modified_time"] ? "，有更新时间标记" : "，未标注更新时间"}`,
-    },
-  ];
-
-  const total = breakdown.reduce((acc, b) => acc + b.score, 0);
-  return { total, breakdown };
-}
-
-function buildRecommendations(checks: CheckResult[], geo: { total: number; breakdown: GeeBreakdown[] }): string[] {
-  const recs: string[] = [];
-  for (const b of geo.breakdown) {
-    const ratio = b.score / b.max;
-    if (ratio >= 0.75) continue;
-    switch (b.id) {
-      case "quotability":
-        recs.push("在正文开头加一段 3-5 行的「核心结论」，并把关键数据做成项目符号或表格 —— 这是 AI 摘要最常搬运的部分。");
+  // v2: 标题层级是否连续无跳跃（无跳级如 H1->H3）
+  let headingContinuity = true;
+  if (headings.length > 0) {
+    let prev = 0;
+    for (const h of headings) {
+      if (prev > 0 && h.level > prev + 1) {
+        headingContinuity = false;
         break;
-      case "structuredness":
-        recs.push("补 JSON-LD：Organization + Article + BreadcrumbList 三件套，并保证 H2 层级不少于 3 个。");
-        break;
-      case "entity":
-        recs.push("标注 author / published_time / modified_time，让 AI 知道「谁在什么时候说的」—— 无名无日期的内容引用率显著更低。");
-        break;
-      case "crawlability":
-        recs.push("检查 robots.txt 与 meta robots；同时在站点根目录放 llms.txt 向 AI 爬虫显式开放优质内容。");
-        break;
-      case "density":
-        recs.push("增加具体数据（金额、比例、时间点）并引用权威外链，把观点变成可验证的事实。");
-        break;
-      case "readability":
-        recs.push("拆分超过 45 字的长句；补充 article:modified_time 表达内容仍在维护。");
-        break;
+      }
+      prev = h.level;
     }
   }
-  if (recs.length === 0) recs.push("GEO 各项表现良好，保持定期复核即可。");
-  return recs;
-}
 
-interface JsonLdInfo {
-  types: string[];
-  /** 是否用 author /creator 标了署名（很多站点写在 JSON-LD 而非 meta 里） */
-  hasAuthor: boolean;
-  hasOrganization: boolean;
-  hasDatePublished: boolean;
-  hasDateModified: boolean;
+  return {
+    paragraphs,
+    lists: ul,
+    listItems: li,
+    tables,
+    quotes: blockquote,
+    codeBlocks: code,
+    dataPoints,
+    externalCitations,
+    hasTldr,
+    avgSentenceLength,
+    hasDirectAnswer,
+    hasSemanticLandmarks,
+    headingContinuity,
+  };
 }
 
 function extractJsonLdInfo(html: string): JsonLdInfo {
@@ -731,6 +622,7 @@ function extractJsonLdInfo(html: string): JsonLdInfo {
   let hasOrganization = false;
   let hasDatePublished = false;
   let hasDateModified = false;
+  let hasSameAs = false;
 
   for (const sc of findTags(html, ["script"])) {
     if (!/ld\+json/i.test(sc.attrs.type ?? "")) continue;
@@ -758,6 +650,7 @@ function extractJsonLdInfo(html: string): JsonLdInfo {
       if (o.publisher !== undefined) hasOrganization = true;
       if (o.datePublished !== undefined) hasDatePublished = true;
       if (o.dateModified !== undefined) hasDateModified = true;
+      if (o.sameAs !== undefined || o.identifier !== undefined) hasSameAs = true;
 
       for (const key of ["@graph", "author", "creator", "publisher", "mainEntity", "itemListElement"]) {
         if (o[key] !== undefined) walk(o[key], depth + 1);
@@ -777,6 +670,7 @@ function extractJsonLdInfo(html: string): JsonLdInfo {
     hasOrganization,
     hasDatePublished,
     hasDateModified,
+    hasSameAs,
   };
 }
 

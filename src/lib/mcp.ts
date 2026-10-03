@@ -21,6 +21,10 @@ import { analyzeRobots, analyzeLlmsTxt, generateLlmsTxtDraft } from "./llms";
  */
 import { searchRankings } from "./services/serp";
 import { probeVisibility, samplingProfile } from "./services/visibility";
+import { checkUrl, checkHtml, autoFixHtml } from "./services/diagnosis";
+import { listObservationHistory, latestObservationDiff } from "./services/observations";
+import { diffObservations } from "./diff";
+import type { Observation } from "./evidence/types";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
@@ -29,7 +33,7 @@ export const SERVER_INFO = {
   version: "0.1.0",
   title: "鲸析 GEOkit",
   description:
-    "面向中文市场与 AI 搜索时代的 SEO/GEO 工具集：百度/搜狗/360/神马/头条排名采集、页面审计、GEO 评分、中文 AI 可见性探测、llms.txt 生成。",
+    "面向中文市场与 AI 搜索时代的 SEO/GEO 工具集：百度/搜狗/360/神马/头条排名采集、页面审计、GEO 评分、中文 AI 可见性探测、全量诊断与安全自动修复、时序比对与观测历史查询、llms.txt 生成。",
 };
 
 /* ------------------------------------------------------------------ */
@@ -91,6 +95,12 @@ export const TOOLS: ToolDef[] = [
       type: "object",
       properties: {
         url: { type: "string", description: "要审计的页面 URL" },
+        geo_version: {
+          type: "string",
+          enum: ["1.0.0", "2.0.0"],
+          description:
+            "GEO 评估模型版本：1.0.0 为经典基线，2.0.0 采用 2026 AI Search / RAG Grounding 启发式标准。默认 1.0.0",
+        },
       },
       required: ["url"],
     },
@@ -157,6 +167,93 @@ export const TOOLS: ToolDef[] = [
       "返回 GEOkit 与 open-seo 在搜索引擎覆盖、AI 模型覆盖、数据依赖、GEO 能力等维度的逐项对比说明。",
     inputSchema: { type: "object", properties: {} },
   },
+  {
+    name: "diagnose_page",
+    title: "页面全量诊断与体检",
+    description:
+      "对指定页面进行全量诊断（包含页面内容审计、robots.txt 爬虫策略、llms.txt 抓取协议）。" +
+      "输出结构化的 blocker、major、minor 严重度计数，以及带稳定 issueId、严重度和 suggestedFix 修复建议的诊断条目。" +
+      "支持传入 url 在线抓取，或传入 html 离线分析。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "要诊断的页面 URL（在线模式）" },
+        html: { type: "string", description: "待诊断的 HTML 源码（离线模式，不发网络请求）" },
+        skipProtocol: { type: "boolean", description: "是否跳过 robots / llms.txt 协议层检查，默认 false" },
+        geo_version: {
+          type: "string",
+          enum: ["1.0.0", "2.0.0"],
+          description:
+            "GEO 评估模型版本：1.0.0 为经典基线，2.0.0 采用 2026 AI Search / RAG Grounding 启发式标准。默认 1.0.0",
+        },
+      },
+    },
+  },
+  {
+    name: "apply_fixes",
+    title: "安全自动修复 HTML 缺陷",
+    description:
+      "基于诊断引擎对 HTML 源码执行安全、幂等的高置信度自动修补。" +
+      "支持自动补齐缺失的 canonical 规范链接、viewport 移动端适配、lang 语言声明、alt 装饰图空属性、OG 社交分享骨架。" +
+      "已有标签绝不覆盖，无法安全定位时绝不盲目修改。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        html: { type: "string", description: "待修复的 HTML 源码字符串" },
+        url: { type: "string", description: "页面所属 URL，用于填充 canonical 与 og:url" },
+        fixIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "指定应用的修复规则 id 列表，如 ['canonical', 'viewport']。缺省时自动应用全部匹配项",
+        },
+      },
+      required: ["html"],
+    },
+  },
+  {
+    name: "diff_observations",
+    title: "观测时序对比与退化判定",
+    description:
+      "对比两次观测结论，判断是提升、退化、中性还是无法比较。" +
+      "可基于 Store 历史时间线（提供 subject 和 type），或直接传入前后两份 Observation JSON 对象（prev 与 curr）。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subject: { type: "string", description: "被观测对象标识（如 'site:https://example.com' 或 'ai-slot:deepseek:deepseek-chat'）" },
+        type: { type: "string", description: "观测类型：'rank' | 'geo_score' | 'ai_mention' | 'robots_policy' | 'llms_txt'" },
+        source: { type: "string", description: "观测来源（如 'search-engine:baidu' 或 'provider:deepseek'）" },
+        to: { type: "string", description: "时间上限（ISO 格式字符串）" },
+        prev: { type: "object", description: "前一次观测的 JSON 对象（文件/内联模式）" },
+        curr: { type: "object", description: "本次观测的 JSON 对象（文件/内联模式）" },
+      },
+    },
+  },
+  {
+    name: "query_history",
+    title: "查询历史观测记录",
+    description:
+      "查询数据仓库（Store）中留存的时序观测数据（Observation）。" +
+      "支持按 subject、source、type、status、时间范围、runId 过滤，支持 latest 仅取最新一条模式。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subject: { type: "string", description: "被观测对象（如 'site:https://example.com'）" },
+        source: { type: "string", description: "观测来源（如 'search-engine:baidu'）" },
+        type: {
+          type: "string",
+          enum: ["rank", "geo_score", "ai_mention", "robots_policy", "llms_txt"],
+          description: "观测类型",
+        },
+        status: { type: "string", description: "观测状态（如 'OBSERVED', 'MENTIONED', 'BLOCKED'）" },
+        runId: { type: "string", description: "批次 id" },
+        from: { type: "string", description: "起始时间（ISO）" },
+        to: { type: "string", description: "截止时间（ISO）" },
+        order: { type: "string", enum: ["asc", "desc"], description: "排序，默认 desc" },
+        limit: { type: "number", description: "返回条数限制（1..500，默认 50）" },
+        latest: { type: "boolean", description: "是否每个 identity 只留最新一条（当前状态视图）" },
+      },
+    },
+  },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -218,12 +315,14 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
     case "audit_page": {
       const url = String(args.url ?? "").trim();
       if (!url) throw new Error("缺少 url");
-      const a = await auditUrl(url);
+      const geoVersion = args.geo_version === "2.0.0" ? "2.0.0" : "1.0.0";
+      const a = await auditUrl(url, { geoVersion });
       return {
         url: a.url,
         httpStatus: a.httpStatus,
         seoScore: a.seoScore,
         geoScore: a.geoScore,
+        geoVersion: a.geoVersion,
         geoBreakdown: a.geoBreakdown.map((b) => `${b.label}: ${b.score}/${b.max} — ${b.comment}`),
         title: a.title,
         description: a.metaDescription,
@@ -366,6 +465,91 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
           geokit: "完整的检测、校验与自动生成",
         },
       };
+
+    case "diagnose_page": {
+      const url = args.url ? String(args.url).trim() : undefined;
+      const html = typeof args.html === "string" ? args.html : undefined;
+      if (!url && !html) {
+        throw new Error("diagnose_page 需要提供 url 或 html 其中之一");
+      }
+      const geoVersion = args.geo_version === "2.0.0" ? "2.0.0" : "1.0.0";
+
+      if (html) {
+        return checkHtml(html, url ?? "https://offline.local", 200, { geoVersion });
+      }
+      return await checkUrl(url!, {
+        skipProtocolChecks: Boolean(args.skipProtocol),
+        geoVersion,
+      });
+    }
+
+    case "apply_fixes": {
+      if (typeof args.html !== "string") {
+        throw new Error("apply_fixes 缺少必需的 html 参数");
+      }
+      const url = args.url ? String(args.url).trim() : undefined;
+      const fixIds = Array.isArray(args.fixIds) ? args.fixIds.map(String) : undefined;
+      const res = autoFixHtml(args.html, { url, fixIds });
+      return {
+        changed: res.changed,
+        attempts: res.attempts,
+        diagnosesCount: res.diagnoses.length,
+        fixedCount: res.attempts.filter((a) => a.changed).length,
+        diagnoses: res.diagnoses.map((d) => ({
+          issueId: d.issueId,
+          severity: d.severity,
+          detail: d.detail,
+          suggestedFix: d.suggestedFix,
+          manualFix: d.manualFix,
+        })),
+        html: res.html,
+        summary: `共扫描 ${res.diagnoses.length} 项问题，尝试 ${res.attempts.length} 项规则，${res.changed ? "HTML 已更新" : "无须修改"}。`,
+      };
+    }
+
+    case "diff_observations": {
+      if (args.prev || args.curr) {
+        if (!args.prev || !args.curr) {
+          throw new Error("diff_observations 比较对象时需要同时提供 prev 与 curr");
+        }
+        const diff = diffObservations(args.prev as Observation, args.curr as Observation);
+        return { source: "inline_objects", diff };
+      }
+
+      const subject = args.subject ? String(args.subject).trim() : undefined;
+      const type = args.type ? String(args.type).trim() : undefined;
+      if (!subject || !type) {
+        throw new Error("diff_observations 需要提供 subject 与 type，或提供 prev 与 curr 对象");
+      }
+
+      const sp = new URLSearchParams();
+      sp.set("subject", subject);
+      sp.set("type", type);
+      if (args.source) sp.set("source", String(args.source).trim());
+      if (args.to) sp.set("to", String(args.to).trim());
+
+      const r = await latestObservationDiff(sp);
+      if (!r.ok) throw new Error(r.error);
+      return r.data;
+    }
+
+    case "query_history": {
+      const sp = new URLSearchParams();
+      if (args.subject) sp.set("subject", String(args.subject).trim());
+      if (args.source) sp.set("source", String(args.source).trim());
+      if (args.type) sp.set("type", String(args.type).trim());
+      if (args.status) sp.set("status", String(args.status).trim());
+      if (args.runId) sp.set("runId", String(args.runId).trim());
+      if (args.from) sp.set("from", String(args.from).trim());
+      if (args.to) sp.set("to", String(args.to).trim());
+      if (args.order) sp.set("order", String(args.order).trim());
+      if (args.limit !== undefined) sp.set("limit", String(args.limit));
+      if (args.latest !== undefined) sp.set("latest", args.latest ? "1" : "0");
+
+      const r = await listObservationHistory(sp);
+      if (!r.ok) throw new Error(r.error);
+      return r.data;
+    }
 
     default:
       throw new Error(`未知工具：${name}`);

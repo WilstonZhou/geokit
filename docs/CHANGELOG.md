@@ -13,7 +13,132 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
-## [修复] — 2026-09-30 · lint 链路修复（Next 16 移除 next lint）
+## [重构 Phase R4] — 2026-10-03 · 全链路模型版本切换与消费端（UI/CLI/MCP/API）深度打通
+
+> 目标：将 Phase R3 构建的 GEO 1.0.0 与 2.0.0 双版本模型，完整暴露给所有消费终端（CLI 命令行、MCP 智能体工具、HTTP API 与 Web 交互界面），形成“可随时切换、可比对验证、默认推荐 2.0.0 但严守 1.0.0 历史基线”的端到端能力闭环。
+
+### 核心变更
+
+1. **诊断服务层版本透明透传（`src/lib/services/diagnosis.ts`）**：
+   - `CheckOptions`、`CheckReport` 统一扩充 `geoVersion?: GeoVersion`。
+   - `checkUrl`、`checkHtml`、`checkFailure` 与 `autoFixHtml` 均支持透传 `geoVersion` 并在报告及修正前后保留版本标记。
+2. **CLI 命令行参数支持 `--geo-version`（`packages/cli/src/bin.ts` & `output.ts`）**：
+   - `geokit check <url> [--geo-version=1.0.0|2.0.0]`：指定版本评估页面。
+   - `geokit gate ... [--geo-version=1.0.0|2.0.0]`：在 CI 门禁中支持按指定模型版本判定。
+   - `renderCheck` Markdown 渲染支持在终端和 PR 评论中直观标注 `(v2.0.0)`。
+3. **MCP Server 扩展（`src/lib/mcp.ts`）**：
+   - `audit_page` 与 `diagnose_page` 工具 schema 增加可选 `geo_version: "1.0.0" | "2.0.0"` 参数，让 Claude/Cursor 等智能体自主决定采用哪套模型标准。
+4. **API 与 Web 界面升级（`src/app/api/audit/route.ts` & `src/app/audit/page.tsx`）**：
+   - POST `/api/audit` 支持 `geoVersion` 载荷。
+   - Web 页面新增顶部**模型版本切换控制器**（GEO 2.0.0 推荐 vs GEO 1.0.0 经典基线），支持即时重跑比对，并在 GEO 评分卡片直观显示版本 Badge 与专属评估依据说明。
+5. **分级集成测试扩充**：
+   - `tests/integration/cli.test.ts`：补充 CLI `--geo-version` 与 Markdown 渲染测试。
+   - `tests/integration/mcp.test.ts`：补充 `diagnose_page` 接受 `geo_version` 的 RPC 调用测试。
+
+### 验证
+
+- `npm test`：**88 项标准测试、40 个套件全量通过**（耗时 ~900ms，0 失败）；
+- `npx tsx scripts/regression.ts check`：**基线回归完全一致**；
+- `npm run typecheck`：0 error；
+- `npm run build`：生产环境打包成功。
+
+---
+
+## [重构 Phase R3] — 2026-10-03 · 2026 AI Search / RAG Grounding 启发式标准与 GEO 2.0.0 升级
+
+> 目标：将 GEO（生成式引擎优化）评分模型从 2024-2025 的朴素特征统计升级为 2026 年大模型检索（Google SGE/AI Overviews, ChatGPT Search, Perplexity）与 RAG 切块/引用启发式规范。同时采用严格版本门禁（Versioning Contract），保障既有 v1.0.0 与历史基线（baseline.json）100% 字节级一致。
+
+### 核心变更
+
+1. **GEO 评分模型版本化隔离（`src/lib/geo/`）**：
+   - 抽象 `src/lib/geo/types.ts`：定义 `GeoVersion`（`"1.0.0"` | `"2.0.0"`）、`GeoInput`、`GeoResult` 与 `ContentShape`。
+   - 实现 `src/lib/geo/v1.ts`：完全继承旧版评估逻辑，保持基线 70 分与 breakdown 六维输出毫无偏差。
+   - 实现 `src/lib/geo/v2.ts`：2026 年 RAG 与大模型检索增强启发式体系（总分 100 分）：
+     - **Quotability (25)**：首屏直接回答（Direct Answer，首屏 100-200 字高置信度回答）、高密度对比表格（HTML/Markdown 表格）、列表步骤。
+     - **Structuredness (20)**：标题层级连续性（连续递进，H1->H3/H4 跳级惩罚以保护 RAG 递归分块树）、HTML5 语义地标（`<main>`/`<article>` 隔离侧边栏噪点）、深层 Schema.org 知识图谱。
+     - **Entity Clarity (15)**：大模型知识库消歧关键属性 `sameAs` / `identifier` / 权威百科或社媒关联，作者与发布/修订时间戳双锚点。
+     - **Crawlability (15)**：爬虫放行、显式 `lang` 属性（指导多语言 Embedding 向量空间分词路由）、传输健康。
+     - **Fact Density (15)**：信息增益（Information Gain）、千字数据点密度、客观一手参考外链。
+     - **Readability & Freshness (10)**：大模型注意力窗口句长适配（15-45 字符区间）、最新修订时间鲜活度。
+   - 模块入口 `src/lib/geo/index.ts`：统一分发 `computeGeo(input, version = "1.0.0")`。
+2. **审计引擎无缝集成（`src/lib/audit.ts`）**：
+   - `analyze` 与 `auditUrl` 扩展可选 `opts?: { geoVersion?: GeoVersion }`，默认 `"1.0.0"`。
+   - `PageAudit` 扩展 `geoVersion` 字段记录评估模型版本。
+   - 内容形态提取器增强对 `hasDirectAnswer`、`hasSemanticLandmarks`、`headingContinuity` 与 JSON-LD `sameAs` 的提取。
+3. **分级测试覆盖（`tests/unit/geo.test.ts`）**：
+   - 覆盖 v1.0.0 基线回归（sample.html 70 分完全一致）。
+   - 覆盖 v2.0.0 标题断层跳级惩罚、HTML5 语义地标加分、sameAs 知识库消歧加分以及 2026 年精准修复建议生成。
+
+### 验证
+
+- `npx tsx scripts/regression.ts check`：**完全一致通过（SEO 91 / GEO 70 / 11 项）**；
+- `npm test`：**85 项测试全量通过**（新增 6 项 GEO 专项测试）；
+- `npm run typecheck`：0 error；
+- `npm run build`：Turbopack 生产编译成功。
+
+---
+
+## [重构 Phase R2] — 2026-10-03 · 原生 node:test 标准化与 Google-Grade 分级测试体系
+
+> 目标：摆脱手写 ad-hoc 断言框架，全面拥抱 Node.js 20+ 原生 `node:test` + `node:assert/strict` 标准测试体系，保持零新增第三方依赖，建立 Small（单元测试）与 Medium（集成测试）分级架构。
+
+### 核心变更
+
+1. **测试架构分级规范化（Google SWE 标准）**：
+   - 建立 `tests/unit/`（密封单元测试，纯内存、毫秒级、0 网络 IO）：
+     - `html.test.ts`：标签匹配、同名嵌套、实体解码、域名提取、标题提取等 10 项测试。
+     - `diagnosis.test.ts`：规则库映射、严重度计算、幂等修复、不覆盖原则等 17 组测试。
+     - `diff.test.ts`：可比性前置校验、位次变化、状态演进、覆盖度不判退化等 9 组测试。
+     - `evidence.test.ts`：规范化 URL、Subject/Source 构造、敏感 Header/URL 脱敏、状态聚合等 13 项测试。
+     - `geo.test.ts`：GEO v1/v2 模型分发、基线一致性、RAG 分块断层惩罚、sameAs 消歧等 6 组测试。
+   - 建立 `tests/integration/`（集成测试，本地文件与服务调用）：
+     - `mcp.test.ts`：12 个 MCP 工具登记、离线诊断、修复幂等性、时序对比与异常处理等 6 项测试。
+     - `cli.test.ts`：`check`、`gate`、`sarif`、`diff` 命令行离线构建与退出码判定等 15 组测试。
+     - `sarif.test.ts`：SARIF 2.1.0 骨架、规则去重、位置映射、无 region 约束等 9 组测试。
+2. **零新增外部依赖，统一原生 Test Runner**：
+   - 在 `package.json` 中配置原生测试命令：
+     - `npm test`：执行 `tests/**/*.test.ts`（全量标准测试）。
+     - `npm run test:unit`：快速执行单元测试。
+     - `npm run test:integration`：执行集成测试。
+   - 兼容保留所有既有 `test:*` 脚本入口，保障已有 CI / 开发习惯零阻断。
+
+### 验证
+
+- `npm test`：**85 项标准测试、40 个测试套件全部通过**（0 失败，总耗时仅约 800ms）；
+- `npm run typecheck`：0 error；
+- 生产构建 `npm run build`：正常通过。
+
+---
+
+## [重构 Phase R1] — 2026-10-03 · 诊断服务下沉与 MCP 12 核心工具全能力打通
+
+> 目标：打通各通道能力壁垒，将 Phase 1（Store/Diff）与 Phase 2（Diagnosis/Fix）完整赋能给 MCP Server 与各消费端。
+
+### 核心变更
+
+1. **下沉诊断服务层（`src/lib/services/diagnosis.ts`）**：
+   - 收敛 `checkUrl`、`checkHtml`、`checkFailure`、`buildCheckReport` 与 `diagnoseProtocol`。
+   - 新增 `autoFixHtml` 高级服务，打通「分析 → 诊断 → 过滤 suggestedFix → applyFixes」的完整自动修复闭环。
+2. **重构 CLI 适配层（`packages/cli/src/check.ts`）**：
+   - 移除包间私有实现，纯重导出 `src/lib/services/diagnosis.ts`，100% 保持既有 CLI、CI、SARIF 门禁契约与行为不变。
+3. **MCP Server 扩展至 12 个核心工具（`src/lib/mcp.ts`）**：
+   - 新增 `diagnose_page`：输出带 blocker/major/minor 计数、稳定 issueId 与 suggestedFix 的机器可读诊断。
+   - 新增 `apply_fixes`：对 HTML 缺失的 canonical、viewport、lang、alt、og 骨架执行安全幂等自动修补。
+   - 新增 `diff_observations`：对比两次观测，输出可比性与指标升降变化（支持 inline JSON 与 Store 历史时间线）。
+   - 新增 `query_history`：翻查 Store 时序观测库，支持多维过滤与 latestOnly 当前状态收敛。
+4. **自动化测试（`scripts/test-mcp.ts`）**：
+   - 35 项测试全量覆盖：12 工具登记核对、离线诊断、修复幂等性（再次执行 changed=false）、Store 查询 hint 说明、diff 判定与异常容错。
+5. **文档与 Web 页面动态联动**：
+   - `/mcp` 页面由 `TOOLS.length` 动态渲染 12 个可用工具及其参数说明；`README.md` 更新徽标与工具清单。
+
+### 验证
+
+- `typecheck` 0 error；
+- `npm run test:mcp`（35 项全过）；
+- 现有测试（`test:cli` 69 项、`test:sarif` 52 项、`test:diagnosis` 63 项、`test:diff` 115 项、`test:store` 116 项、`test:sqlite-store` 50 项）全部 100% 通过；
+- `npm run build` 生产构建成功（7 静态页 + 7 API 路由）。
+
+---
 
 **问题**：`package.json` 的 `lint` 脚本指向 `next lint`，但 Next.js 16 已移除该命令
 （实测报错退出码 1）。项目此前无 ESLint 配置、CI 未跑 lint，缺陷一直未暴露。

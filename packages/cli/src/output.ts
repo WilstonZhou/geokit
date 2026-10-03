@@ -47,7 +47,7 @@ function renderCheckMarkdown(r: CheckReport): string {
   lines.push("");
   lines.push(`- 最终地址：${r.finalUrl ?? r.url}`);
   lines.push(`- HTTP：${r.httpStatus}`);
-  lines.push(`- SEO ${r.seoScore} / GEO ${r.geoScore}`);
+  lines.push(`- SEO ${r.seoScore} / GEO ${r.geoScore}${r.geoVersion ? ` (v${r.geoVersion})` : ""}`);
   lines.push(
     `- 问题：blocker ${r.counts.blocker} · major ${r.counts.major} · minor ${r.counts.minor}`
   );

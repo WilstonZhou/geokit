@@ -18,7 +18,7 @@ AIGC:
 ![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
 ![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
 ![Dependencies](https://img.shields.io/badge/direct%20deps-4-brightgreen)
-![MCP](https://img.shields.io/badge/MCP-8%20tools-blue)
+![MCP](https://img.shields.io/badge/MCP-12%20tools-blue)
 
 **中文优先的 SEO / GEO 工具**：自建百度 / 搜狗 / 360 / 神马 / 头条采集，
 六维 GEO 评分，九个 AI 模型的品牌可见性探测，以及一套 AI 抓取协议层。
@@ -72,7 +72,7 @@ open-seo 是个好项目 —— 28 万行代码、自研站点审计爬虫、完
 </tr>
 <tr>
 <td><b>AI 抓取协议层</b><br>20 个 AI 爬虫的 robots 策略 + llms.txt 校验与生成</td>
-<td><b>MCP Server</b><br>8 个工具、两种传输方式，附可直接粘贴的接入配置</td>
+<td><b>MCP Server</b><br>12 个核心工具、两种传输方式，附可直接粘贴的接入配置</td>
 </tr>
 <tr>
 <td><img src="docs/screenshots/04-llms.png" alt="AI 抓取协议层"></td>
@@ -108,16 +108,24 @@ npm run dev        # http://localhost:3210
 ## GEO 评分是什么
 
 传统 SEO 检查只回答「Google 会不会收录我」。2026 年真正的问题是「AI 愿不愿意引用我」。
-GEOkit 的 `geoScore` 由六个可观测维度构成：
+GEOkit 提供两套严格版本化的 `geoScore` 评分模型（可在 Web UI、CLI `--geo-version` 与 MCP 参数中灵活切换）：
 
-| 维度 | 权重 | 看什么 |
+### GEO 2.0.0（2026 AI Search & RAG Grounding 启发式 · 推荐）
+
+面向 Google SGE/AI Overviews、ChatGPT Search、Perplexity 与企业 RAG 知识检索：
+
+| 维度 | 权重 | 2026 评估信号 |
 | --- | --- | --- |
-| 可引用性 | 25 | 是否有结论前置、列表、表格、可摘取的数据点 |
-| 结构化 | 20 | JSON-LD 类型数、H 标签层级、canonical |
-| 实体清晰度 | 15 | 作者、组织、发布时间是否被标注 |
-| 可抓取性 | 15 | robots 策略、语言声明、内容可获取性 |
-| 事实密度 | 15 | 每千字数据点数、外部权威引用数量 |
-| 可读性 / 时效 | 10 | 平均句长、是否有 modified_time |
+| 可引用性 Quotability | 25 | 首屏直接回答（Direct Answer 100-200 字）、对比表格、步骤列表、硬核量化数据点 |
+| 结构化/RAG 切块 Structuredness | 20 | 标题层级连续性（**严格递进，H1->H3/H4 跳级惩罚**以保护 RAG 分块树）、`<main>`/`<article>` 语义地标 |
+| 实体清晰度/消歧 Entity Clarity | 15 | 大模型知识图谱消歧（JSON-LD `sameAs`/`identifier`）、明确作者与双时间戳锚点 |
+| 可抓取性/AI 协议 Crawlability | 15 | AI 爬虫通道放行、显式 `lang` 语言声明（指导多语言 Embedding 向量分词路由） |
+| 事实密度/增益 Fact Density | 15 | 信息增益（Information Gain）、每千字量化数据指标、一手权威参考引用 |
+| 分块适配/时效 Readability & Freshness | 10 | 大模型滑动窗口与注意力集中最优句长（15-45 字符区间）、最新修订时间戳 |
+
+### GEO 1.0.0（经典基线模式）
+
+完全保持与项目既有 baseline 一致的特征统计打分体系，供历史比对与 CI 回归基线。
 
 每一项都由页面里真实存在的信号计算，输出时会附上「为什么得这个分」的依据，而不是一个孤立的数字。
 
@@ -144,10 +152,13 @@ POST http://localhost:3210/api/mcp
 }
 ```
 
-八个工具：`list_engines`、`check_serp_ranking`、`audit_page`、`check_ai_visibility`、
-`analyze_robots`、`analyze_llms_txt`、`generate_llms_txt`、`compare_with_openseo`。
+十二个工具：
+- 采集与审计：`list_engines`、`check_serp_ranking`、`audit_page`、`check_ai_visibility`
+- 诊断与修复：`diagnose_page`（全量诊断与体检）、`apply_fixes`（安全幂等自动修复）
+- 时序与数据：`query_history`（历史观测查询）、`diff_observations`（时序对比与退化判定）
+- 协议与对比：`analyze_robots`、`analyze_llms_txt`、`generate_llms_txt`、`compare_with_openseo`
 
-典型 Agent 闭环：找排名缺口 → 定位页面问题 → 补 AI 协议 → 复检 AI 可见性。
+典型 Agent 闭环：找排名缺口 → 页面深度诊断 → 自动应用修复 → 复查 AI 协议 → 历史比对确认退化/提升。
 
 ## 可选的环境变量
 
@@ -174,31 +185,73 @@ GEOkit 的选择是**如实返回 `status: "blocked"` 并写明原因与解决�
 缓存旧数据或随机数冒充真实排名。宁可让你知道「这次没抓到」，也不要让你基于假数据
 做出错的投放决策。这条原则贯穿每一个接口。
 
-## 技术栈
+## 命令行与 CI 门禁（CLI）
 
-Next.js 16 / React 19 / Tailwind v4 / TypeScript。**直接依赖只有 4 个**
-（next、react、react-dom、zod）—— HTML 解析、排序计算、robots 解析全部自研，
-目的是让整套东西保持足够小、足够可读，你能直接 fork 开改。
+GEOkit 提供独立于 Web 服务的轻量级 CLI 工具（冷启动、确定性退出码、支持 GitHub Code Scanning SARIF 格式）：
 
-对比 open-seo 的 44 个直接依赖 + TanStack Start + Cloudflare Workers + Drizzle，
-GEOkit 牺牲了一部分功能广度，换取的是**可理解性与可改造性**。
+```bash
+# 1. 页面检查：支持在线抓取或本地 HTML 离线分析，可选 1.0.0 / 2.0.0 评分模型
+npx tsx packages/cli/src/bin.ts check https://example.com/page --geo-version=2.0.0
+
+# 2. CI 门禁判定：相对基线退化 > 5 分或新增 blocker 时非零退出阻断合并
+npx tsx packages/cli/src/bin.ts gate --base=tests/baseline/baseline.json --url=https://example.com
+
+# 3. 产出 GitHub Code Scanning 标准 SARIF 2.1.0 报告
+npx tsx packages/cli/src/bin.ts sarif --report=check.json --out=geokit.sarif
+
+# 4. 时序观测比对：比对两次观测状态演进，智能识别真实提升与退化
+npx tsx packages/cli/src/bin.ts diff --prev=prev.json --curr=curr.json
+```
+
+## 测试与工程质量（Google SWE 标准）
+
+全面拥抱 Node.js 20+ 原生 `node:test` + `node:assert/strict` 测试体系，**保持直接依赖零新增**：
+
+- **分级测试体系**：
+  - **Unit Tests（密封单元测试）**：位于 `tests/unit/`，纯内存、毫秒级、0 网络依赖，覆盖 HTML 容错解析、诊断规则库映射、修复幂等性、时序比对矩阵、GEO 双模型评分与断层跳级惩罚。
+  - **Integration Tests（集成测试）**：位于 `tests/integration/`，覆盖 12 个 MCP 协议交互、CLI 命令行与退出码、SARIF 2.1.0 规范契约。
+- **基线回归门禁**：通过 `scripts/regression.ts` 对离线基线（`tests/baseline/baseline.json`）执行字节级一致性校验，防范算法静默漂移。
+
+```bash
+npm test                  # 运行全量 88 项标准测试（耗时 < 1 秒）
+npm run test:unit         # 纯单元测试
+npm run test:integration  # 集成测试
+npm run typecheck         # TypeScript 全量类型检查
+npm run build             # Next.js 生产打包编译
+npx tsx scripts/regression.ts check  # 离线基线回归比对
+```
+
+## 技术栈与零依赖哲学
+
+Next.js 16 / React 19 / Tailwind v4 / TypeScript。**生产直接依赖严格锁定为 4 个**
+（`next`、`react`、`react-dom`、`zod`）—— HTML 解析、排序计算、robots 解析、GEO 打分、原生测试与本地存储全部自研或采用 Node 内置模块，不引入臃肿的无用中间层。
+
+对比 open-seo 的 44 个直接依赖 + 外部付费 API 绑定，GEOkit 追求的是**极高透明度、极低运维成本、可直接单步调试与自由 Fork**。
 
 ## 项目结构
 
 ```
+packages/
+  cli/             独立轻量 CLI 门禁与 SARIF 转换（bin, check, gate, diff, sarif, output）
 src/
   lib/
-    engines.ts      搜索引擎注册表（7 个引擎，5 个是 open-seo 的空白区）
-    html.ts         零依赖 HTML 解析
-    serp.ts         多引擎采集与位次解析
-    audit.ts        页面审计 + GEO 六维评分
-    visibility.ts   中文 AI 可见性探测矩阵
-    llms.ts         robots AI 策略 + llms.txt 检测与生成
-    mcp.ts          MCP server（JSON-RPC 2.0）
+    geo/           GEO 评分核心（types, v1 经典基线, v2 2026 RAG 启发式, index 调度）
+    services/      集中业务服务层（diagnosis 全量诊断与自动修复, serp, visibility, observations）
+    evidence/      可追溯存证引擎与时序观察（identity 统一规范化, store 零依赖存储, types）
+    engines.ts     搜索引擎注册表（7 个引擎，覆盖百度/搜狗/360/神马/头条/Google/Bing）
+    html.ts        零依赖高性能 HTML 解析器（支持容错与深层嵌套提取）
+    serp.ts        多引擎采集与自然排名解析
+    audit.ts       页面技术审计聚合
+    llms.ts        robots.txt AI 策略分析 + llms.txt 规范校验与生成器
+    mcp.ts         MCP Server（支持 Streamable HTTP 与 stdio，提供 12 个核心工具）
   app/
-    api/{audit,serp,visibility,llms,mcp}/route.ts
-    {serp,audit,visibility,llms,mcp}/page.tsx
-scripts/mcp-stdio.ts   stdio 传输入口
+    api/           REST API 路由（audit, serp, visibility, llms, mcp, observations）
+    (views)/       Next.js 现代化仪表盘（audit, serp, visibility, llms, mcp）
+tests/
+  unit/            密封单元测试（html, diagnosis, diff, evidence, geo）
+  integration/     端到端集成测试（cli, mcp, sarif）
+  baseline/        离线锁定基线快照（baseline.json）
+  fixtures/        离线复现夹具（serp, audit）
 ```
 
 ## 许可证

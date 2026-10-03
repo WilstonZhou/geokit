@@ -78,12 +78,13 @@ const USAGE = `geokit — 鲸析 GEOkit 命令行
 
   所有命令均支持 --format=${OUTPUT_FORMATS.join("|")} [--out=<path>]
 
-  geokit check <url> [--html-file=<path>] [--status=200] [--skip-protocol]
+  geokit check <url> [--html-file=<path>] [--status=200] [--skip-protocol] [--geo-version=1.0.0|2.0.0]
       页面检查：audit + robots + llms.txt → Diagnosis
       退出码：有 blocker / major ⇒ 1，否则 0
       --html-file 走离线模式，不联网（测试与 fixture 复现用）
+      --geo-version 指定 GEO 评分模型版本（默认 1.0.0；2.0.0 采用 2026 AI Search & RAG 启发式）
 
-  geokit gate --base=<baseline.json> (--report=<check.json> | --url=<url>) [--format=json|markdown]
+  geokit gate --base=<baseline.json> (--report=<check.json> | --url=<url>) [--format=json|markdown] [--geo-version=1.0.0|2.0.0]
       门禁判定：相对基线下降 > 5 + 新增 blocker + GEO 绝对下限 40
       退出码：fail ⇒ 1，否则 0
       不跑 Search / AI Observer —— CI 里跑它们等于主动撞风控
@@ -108,6 +109,19 @@ async function main(): Promise<number> {
 
   const format = parseFormat(flags.format);
 
+  const rawGeoVer = flags["geo-version"] ?? flags.geoVersion;
+  const geoVersion: "1.0.0" | "2.0.0" | undefined =
+    rawGeoVer === "2.0.0" || rawGeoVer === "2"
+      ? "2.0.0"
+      : rawGeoVer === "1.0.0" || rawGeoVer === "1"
+      ? "1.0.0"
+      : undefined;
+
+  if (rawGeoVer && !geoVersion) {
+    process.stderr.write(`无效的 geo-version "${rawGeoVer}"，可选："1.0.0" | "2.0.0"\n`);
+    return 2;
+  }
+
   switch (command) {
     case "check": {
       const url = positional[0];
@@ -119,10 +133,11 @@ async function main(): Promise<number> {
       if (flags["html-file"]) {
         // 离线模式：直接分析本地 HTML，不联网（测试与 fixture 复现用）
         const html = readFileSync(flags["html-file"], "utf8");
-        report = checkHtml(html, url, Number(flags.status ?? 200));
+        report = checkHtml(html, url, Number(flags.status ?? 200), { geoVersion });
       } else {
         report = await checkUrl(url, {
           skipProtocolChecks: flags["skip-protocol"] === "true",
+          geoVersion,
         });
       }
       emit(renderCheck(report, format), flags.out);
@@ -140,7 +155,7 @@ async function main(): Promise<number> {
       } else if (flags.url) {
         // 现跑一次 check（联网）。CI 里更推荐先 check --format=json 存产物
         url = flags.url;
-        snapshot = snapshotOf(await checkUrl(flags.url));
+        snapshot = snapshotOf(await checkUrl(flags.url, { geoVersion }));
       } else {
         process.stderr.write("gate 需要 --report=<check.json> 或 --url=<url>\n");
         return 2;

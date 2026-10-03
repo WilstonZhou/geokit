@@ -21,24 +21,27 @@ interface Audit {
   internalLinks: number; externalLinks: number;
   hasViewport: boolean; lang: string | null;
   checks: Check[]; seoScore: number; geoScore: number;
+  geoVersion?: "1.0.0" | "2.0.0";
   geoBreakdown: Breakdown[]; recommendations: string[];
 }
 
 export default function AuditPage() {
   const [url, setUrl] = useState("");
+  const [geoVersion, setGeoVersion] = useState<"1.0.0" | "2.0.0">("2.0.0");
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<Audit | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  async function run(target?: string) {
+  async function run(target?: string, versionOverride?: "1.0.0" | "2.0.0") {
     const t = (target ?? url).trim();
     if (!t) return;
+    const ver = versionOverride ?? geoVersion;
     setLoading(true); setErr(null);
     try {
       const res = await fetch("/api/audit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: t }),
+        body: JSON.stringify({ url: t, geoVersion: ver }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "审计失败");
@@ -76,6 +79,48 @@ export default function AuditPage() {
             </button>
           </div>
         </Field>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-ink-100 pt-3">
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] font-medium text-ink-600">模型版本：</span>
+            <div className="inline-flex rounded-lg border border-ink-200 bg-ink-50/70 p-0.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setGeoVersion("2.0.0");
+                  if (data && url.trim()) run(url, "2.0.0");
+                }}
+                className={`rounded-md px-2.5 py-1 text-[11.5px] font-medium transition ${
+                  geoVersion === "2.0.0"
+                    ? "border border-ocean-200 bg-white text-ocean-700 shadow-xs"
+                    : "text-ink-600 hover:text-ink-900"
+                }`}
+              >
+                GEO 2.0.0 (2026 AI Search & RAG · 推荐)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setGeoVersion("1.0.0");
+                  if (data && url.trim()) run(url, "1.0.0");
+                }}
+                className={`rounded-md px-2.5 py-1 text-[11.5px] font-medium transition ${
+                  geoVersion === "1.0.0"
+                    ? "border border-ink-200 bg-white text-ink-800 shadow-xs"
+                    : "text-ink-500 hover:text-ink-800"
+                }`}
+              >
+                GEO 1.0.0 (经典基线)
+              </button>
+            </div>
+          </div>
+          <span className="text-[11px] text-ink-400">
+            {geoVersion === "2.0.0"
+              ? "评估首屏直接回答、RAG 标题连续性、HTML5 语义地标与 sameAs 消歧"
+              : "保持 2024-2025 历史特征统计一致性"}
+          </span>
+        </div>
+
         <div className="mt-3 flex flex-wrap gap-2">
           {["https://whivi.com", "https://www.baidu.com", "https://github.com"].map((s) => (
             <button
@@ -119,10 +164,17 @@ export default function AuditPage() {
             </Card>
 
             <Card className="flex flex-col items-center justify-center border-ocean-200 bg-gradient-to-br from-ocean-50 to-white">
-              <h3 className="text-[13px] font-medium text-ocean-800">GEO 分</h3>
+              <div className="flex items-center gap-2">
+                <h3 className="text-[13px] font-medium text-ocean-800">GEO 分</h3>
+                <Badge tone={data.geoVersion === "2.0.0" ? "info" : "neutral"}>
+                  v{data.geoVersion ?? "1.0.0"}
+                </Badge>
+              </div>
               <div className="mt-3"><ScoreRing score={data.geoScore} size={112} label="AI 引用友好度" /></div>
               <p className="mt-3 text-center text-[11.5px] leading-relaxed text-ink-600">
-                六维度评估「AI 是否愿意且能够引用此页」—— open-seo 无此能力。
+                {data.geoVersion === "2.0.0"
+                  ? "基于 2026 AI Search 与 RAG 启发式六维模型评估。"
+                  : "基于经典基线六维模型评估。"}
               </p>
             </Card>
 
