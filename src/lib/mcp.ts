@@ -20,11 +20,13 @@ import { analyzeRobots, analyzeLlmsTxt, generateLlmsTxtDraft } from "./llms";
  * 一旦某侧修改，Agent 的决策依据就会静默漂移，而没有任何测试会发现。
  */
 import { searchRankings } from "./services/serp";
-import { probeVisibility, samplingProfile } from "./services/visibility";
+import { probeVisibility, samplingProfile, batchProbeVisibility } from "./services/visibility";
+import { analyzeCitations } from "./visibility/aggregate";
+import { extractCitations } from "./visibility/parser";
 import { checkUrl, checkHtml, autoFixHtml } from "./services/diagnosis";
 import { listObservationHistory, latestObservationDiff } from "./services/observations";
 import { diffObservations } from "./diff";
-import type { Observation } from "./evidence/types";
+import type { Observation, CitationRecord } from "./evidence/types";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
@@ -105,8 +107,31 @@ export const TOOLS: ToolDef[] = [
       required: ["url"],
     },
   },
-  {
-    name: "check_ai_visibility",
+  { name: "analyze_ai_citations",
+      title: "AI 引用与竞品情报分析",
+      description:
+        "批量查询多个 Query，获取并聚合各大 AI 模型的引用来源排行、竞品提及频次、引用缺口。",
+      inputSchema: {
+        type: "object",
+        properties: {
+          queries: {
+            type: "array",
+            items: { type: "string" },
+            description: "需要探测的查询词列表，例如 ['地热能是什么', '哪家地热公司最好']"
+          },
+          brand: { type: "string", description: "品牌词，用于识别提及" },
+          domain: { type: "string", description: "用户站点域名，用于发现引用缺口" },
+          competitors: {
+            type: "array",
+            items: { type: "string" },
+            description: "需要监控的竞品品牌或域名列表"
+          }
+        },
+        required: ["queries", "brand", "domain"]
+      }
+    },
+    {
+      name: "check_ai_visibility",
     title: "中文 AI 可见性探测",
     description:
       "向 DeepSeek、豆包、Kimi、通义、文心、元宝、ChatGPT、Claude、Gemini 提问，检测指定品牌是否被提及。" +
@@ -219,7 +244,8 @@ export const TOOLS: ToolDef[] = [
     inputSchema: {
       type: "object",
       properties: {
-        subject: { type: "string", description: "被观测对象标识（如 'site:https://example.com' 或 'ai-slot:deepseek:deepseek-chat'）" },
+        target: { type: "string", description: "Target" },
+          subject: { type: "string", description: "被观测对象标识（如 'site:https://example.com' 或 'ai-slot:deepseek:deepseek-chat'）" },
         type: { type: "string", description: "观测类型：'rank' | 'geo_score' | 'ai_mention' | 'robots_policy' | 'llms_txt'" },
         source: { type: "string", description: "观测来源（如 'search-engine:baidu' 或 'provider:deepseek'）" },
         to: { type: "string", description: "时间上限（ISO 格式字符串）" },
@@ -229,7 +255,7 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
-    name: "query_history",
+    name: "list_observations",
     title: "查询历史观测记录",
     description:
       "查询数据仓库（Store）中留存的时序观测数据（Observation）。" +
@@ -241,7 +267,7 @@ export const TOOLS: ToolDef[] = [
         source: { type: "string", description: "观测来源（如 'search-engine:baidu'）" },
         type: {
           type: "string",
-          enum: ["rank", "geo_score", "ai_mention", "robots_policy", "llms_txt"],
+          enum: ["rank", "geo_score", "ai_mention", "robots_policy", "llms_txt", "serp", "audit", "ai_citation", "crawl", "gsc", "robots", "llms"],
           description: "观测类型",
         },
         status: { type: "string", description: "观测状态（如 'OBSERVED', 'MENTIONED', 'BLOCKED'）" },
@@ -331,6 +357,42 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
         wordCount: a.wordCount,
         failedChecks: a.checks.filter((c) => c.level !== "pass").map((c) => `${c.label}(${c.level}): ${c.detail}`),
         recommendations: a.recommendations,
+      };
+    }
+
+    
+    case "analyze_ai_citations": {
+      const queries = (args.queries as string[]) || [];
+      const brand = String(args.brand);
+      const domain = String(args.domain);
+      const competitors = (args.competitors as string[]) || [];
+
+      const reports = await batchProbeVisibility(brand, queries, 3);
+
+      // 汇总每个 (query, model) 的引用记录；模型响应里没有链接就是 unavailable,不编造
+      const records: CitationRecord[] = [];
+      for (const report of reports) {
+        for (const probe of report.probes) {
+          let cit = probe.citation;
+          if (!cit && probe.rawResponse) {
+            cit = extractCitations(
+              probe.rawResponse,
+              report.prompt,
+              probe.providerName,
+              probe.mentioned,
+              brand,
+              competitors
+            );
+          }
+          if (cit) records.push(cit);
+        }
+      }
+
+      const aggregation = analyzeCitations(records, domain);
+      return {
+        totalQueries: queries.length,
+        totalRecords: records.length,
+        aggregation,
       };
     }
 
@@ -533,9 +595,12 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       return r.data;
     }
 
-    case "query_history": {
+    // query_history 为旧名别名,保持向后兼容(不在 tools/list 里重复列出)
+    case "query_history":
+    case "list_observations": {
       const sp = new URLSearchParams();
       if (args.subject) sp.set("subject", String(args.subject).trim());
+      if (args.target) sp.set("target", String(args.target).trim());
       if (args.source) sp.set("source", String(args.source).trim());
       if (args.type) sp.set("type", String(args.type).trim());
       if (args.status) sp.set("status", String(args.status).trim());
@@ -645,3 +710,4 @@ export async function handleJsonRpcBatch(raw: string): Promise<unknown | null> {
   }
   return handleJsonRpc(parsed as JsonRpcRequest);
 }
+

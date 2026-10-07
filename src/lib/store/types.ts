@@ -81,6 +81,7 @@ export interface EvidenceQuery extends ListOptions {
 export interface ObservationQuery extends ListOptions {
   type?: ObservationKind | string;
   subject?: string;
+  target?: string; // T1: alias for subject
   source?: string;
   runId?: string;
   status?: ObservationStatus | string;

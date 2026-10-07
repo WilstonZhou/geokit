@@ -42,6 +42,13 @@ export const OBSERVATION_KINDS: readonly ObservationKind[] = [
   "ai_mention",
   "robots_policy",
   "llms_txt",
+  "serp",
+  "audit",
+  "ai_citation",
+  "crawl",
+  "gsc",
+  "robots",
+  "llms"
 ];
 
 /** 契约允许的全部 status。同上 */
@@ -54,6 +61,10 @@ export const OBSERVATION_STATUSES: readonly ObservationStatus[] = [
   "BLOCKED",
   "ERROR",
   "UNOBSERVABLE",
+  "ok",
+  "blocked",
+  "unavailable",
+  "error"
 ];
 
 export const DEFAULT_HISTORY_LIMIT = 50;
@@ -128,6 +139,9 @@ export function parseHistoryQuery(
     }
     q.type = type;
   }
+
+  const target = str(sp, "target");
+  if (target !== undefined) q.target = target;
 
   const status = str(sp, "status");
   if (status !== undefined) {

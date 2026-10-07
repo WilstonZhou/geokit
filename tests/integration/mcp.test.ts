@@ -24,7 +24,7 @@ async function callMcpTool(name: string, args: Record<string, unknown> = {}) {
 }
 
 describe("MCP Server Integration Tests", () => {
-  it("tools/list lists all 12 registered tools", async () => {
+  it("tools/list lists all 13 registered tools", async () => {
     const listRes = (await handleJsonRpc({
       jsonrpc: "2.0",
       id: "init",
@@ -34,7 +34,7 @@ describe("MCP Server Integration Tests", () => {
     const tools = listRes.result.tools;
     const names = tools.map((t) => t.name);
 
-    assert.strictEqual(tools.length, 12);
+    assert.strictEqual(tools.length, 13);
     assert.ok(names.includes("list_engines"));
     assert.ok(names.includes("check_serp_ranking"));
     assert.ok(names.includes("audit_page"));
@@ -46,7 +46,10 @@ describe("MCP Server Integration Tests", () => {
     assert.ok(names.includes("diagnose_page"));
     assert.ok(names.includes("apply_fixes"));
     assert.ok(names.includes("diff_observations"));
-    assert.ok(names.includes("query_history"));
+    assert.ok(names.includes("list_observations"));
+    assert.ok(names.includes("analyze_ai_citations"));
+    // query_history 是 list_observations 的向后兼容别名,不在 tools/list 重复列出
+    assert.ok(!names.includes("query_history"));
   });
 
   it("diagnose_page produces structured diagnoses from offline HTML", async () => {
@@ -106,8 +109,8 @@ describe("MCP Server Integration Tests", () => {
     assert.strictEqual(secondData.fixedCount, 0);
   });
 
-  it("query_history returns store records and proper hint when empty", async () => {
-    const res = await callMcpTool("query_history", {
+  it("list_observations returns store records and proper hint when empty", async () => {
+    const res = await callMcpTool("list_observations", {
       type: "geo_score",
       limit: 10,
     });
@@ -122,6 +125,17 @@ describe("MCP Server Integration Tests", () => {
     if (data.count === 0) {
       assert.strictEqual(typeof data.hint, "string");
     }
+  });
+
+  it("query_history alias still works for backward compatibility", async () => {
+    const res = await callMcpTool("query_history", {
+      type: "geo_score",
+      limit: 10,
+    });
+    assert.strictEqual(res.result?.isError, false);
+    const data = res.result?.structuredContent as { count: number; items: unknown[] };
+    assert.strictEqual(typeof data.count, "number");
+    assert.ok(Array.isArray(data.items));
   });
 
   it("diff_observations compares two observations accurately", async () => {

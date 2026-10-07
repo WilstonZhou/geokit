@@ -379,7 +379,8 @@ export class JsonlStore implements Store {
     this.ensureObservations();
     let out = this.observations.filter((o) => {
       if (q.type && o.type !== q.type) return false;
-      if (q.subject && o.subject !== q.subject) return false;
+      const subj = q.target ?? q.subject;
+      if (subj && o.subject !== subj && o.target !== subj) return false;
       if (q.source && o.source !== q.source) return false;
       if (q.runId && o.runId !== q.runId) return false;
       if (q.status && o.status !== q.status) return false;

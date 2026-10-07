@@ -70,3 +70,34 @@ export async function probeVisibility(
 export function samplingProfile() {
   return { ...SAMPLING_PROFILE, parserVersion: AI_VISIBILITY_PARSER_VERSION };
 }
+
+export async function batchProbeVisibility(
+  brand: string,
+  topics: string[],
+  concurrency: number = 2
+): Promise<VisibilityReport[]> {
+  const keys = collectProviderKeys();
+  const reports: VisibilityReport[] = [];
+  
+  // A simple async pool for concurrency limit
+  const runTasks = async () => {
+    let i = 0;
+    const workers = Array(concurrency).fill(null).map(async () => {
+      while (i < topics.length) {
+        const idx = i++;
+        const t = topics[idx];
+        if (!brand.trim() || !t.trim()) continue;
+        try {
+          const report = await runVisibilityMatrix(brand, t, keys);
+          reports.push(report);
+        } catch (e) {
+          console.error("Failed to probe visibility for " + t, e);
+        }
+      }
+    });
+    await Promise.all(workers);
+  };
+  
+  await runTasks();
+  return reports;
+}

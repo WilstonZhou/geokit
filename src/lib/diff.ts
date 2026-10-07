@@ -492,6 +492,53 @@ function diffCoverage(prev: Observation, cur: Observation): DiffChange | null {
   };
 }
 
+function diffExtractedEvidence(prev: Observation, cur: Observation): DiffChange[] {
+  const changes: DiffChange[] = [];
+  const prevEv = prev.extractedEvidence ?? [];
+  const curEv = cur.extractedEvidence ?? [];
+  
+  const prevMap = new Map(prevEv.map(e => [e.signal, e]));
+  const curMap = new Map(curEv.map(e => [e.signal, e]));
+
+  for (const [signal, curE] of curMap.entries()) {
+    const prevE = prevMap.get(signal);
+    if (!prevE) {
+      changes.push({
+        kind: 'EVIDENCE',
+        path: 'extractedEvidence.' + signal,
+        previous: null,
+        current: curE.value,
+        direction: 'unknown',
+        note: curE.note ?? 'New signal'
+      });
+    } else if (JSON.stringify(prevE.value) !== JSON.stringify(curE.value)) {
+      changes.push({
+        kind: 'EVIDENCE',
+        path: 'extractedEvidence.' + signal,
+        previous: prevE.value,
+        current: curE.value,
+        direction: 'unknown',
+        note: curE.note ?? 'Changed signal'
+      });
+    }
+  }
+
+  for (const [signal, prevE] of prevMap.entries()) {
+    if (!curMap.has(signal)) {
+      changes.push({
+        kind: 'EVIDENCE',
+        path: 'extractedEvidence.' + signal,
+        previous: prevE.value,
+        current: null,
+        direction: 'unknown',
+        note: 'Removed signal'
+      });
+    }
+  }
+
+  return changes;
+}
+
 function diffEvidenceRefs(prev: Observation, cur: Observation): DiffChange | null {
   const a = Array.from(new Set(prev.evidenceRefs ?? [])).sort();
   const b = Array.from(new Set(cur.evidenceRefs ?? [])).sort();
@@ -645,6 +692,8 @@ export function diffObservations(
   const statusChange = diffStatus(previous, cur);
   if (statusChange) changes.push(statusChange);
 
+  changes.push(...diffExtractedEvidence(previous, cur));
+
   const metrics = METRICS[cur.type] ?? [];
   for (const spec of metrics) {
     const c = diffValue(spec, previous, cur);
@@ -698,7 +747,8 @@ function versionValueOf(o: Observation, reason: IncomparableReason): unknown {
 /* ------------------------------------------------------------------ */
 
 export interface DiffQuery {
-  subject: string;
+  subject?: string;
+  target?: string;
   type: ObservationKind | string;
   /** 不传 = 不限来源（多引擎/多厂商会被混进来，通常应当指定） */
   source?: string;
@@ -724,6 +774,7 @@ export async function latestPair(
 ): Promise<{ previous: Observation | null; current: Observation | null }> {
   const all = await store.listObservations({
     subject: q.subject,
+    target: q.target,
     type: q.type,
     source: q.source,
     to: q.to,

@@ -227,9 +227,10 @@ export class SqliteStore implements Store {
   private evidenceWhere(q: EvidenceQuery): Clause {
     const w: string[] = ["1 = 1"];
     const p: (string | number)[] = [];
-    if (q.subject) {
+    const subj = (q as { target?: string }).target ?? q.subject;
+    if (subj) {
       w.push("subject = ?");
-      p.push(q.subject);
+      p.push(subj);
     }
     if (q.source) {
       w.push("source = ?");
@@ -389,9 +390,10 @@ export class SqliteStore implements Store {
       w.push("type = ?");
       p.push(q.type);
     }
-    if (q.subject) {
+    const subj = q.target ?? q.subject;
+    if (subj) {
       w.push("subject = ?");
-      p.push(q.subject);
+      p.push(subj);
     }
     if (q.source) {
       w.push("source = ?");

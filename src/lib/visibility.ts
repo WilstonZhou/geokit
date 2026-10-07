@@ -27,6 +27,7 @@
  */
 
 import { createHash } from "node:crypto";
+import type { CitationRecord } from "./evidence/types";
 
 import { fetchWithPolicy, type FetchPurpose, type FetchResult } from "./fetcher";
 import type { AiObservationStatus, Confidence, Evidence } from "./evidence/types";
@@ -208,6 +209,9 @@ export interface VisibilityProbe {
   citedDomains: string[];
 
   note?: string;
+
+  /** T2: Citation record */
+  citation?: CitationRecord;
 
   /** ── 可复现性元数据 ───────────────────────────────── */
 

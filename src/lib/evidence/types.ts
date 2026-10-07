@@ -287,7 +287,14 @@ export type ObservationKind =
   | "geo_score"
   | "ai_mention"
   | "robots_policy"
-  | "llms_txt";
+  | "llms_txt"
+  | "serp"
+  | "audit"
+  | "ai_citation"
+  | "crawl"
+  | "gsc"
+  | "robots"
+  | "llms";
 
 export type Confidence = "high" | "medium" | "low" | "unavailable";
 
@@ -336,7 +343,30 @@ export type ObservationStatus =
   | "NOT_MENTIONED"
   | "BLOCKED"
   | "ERROR"
-  | "UNOBSERVABLE";
+  | "UNOBSERVABLE"
+  | "ok"
+  | "blocked"
+  | "unavailable"
+  | "error";
+
+export interface ExtractedEvidence {
+  signal: string;
+  value: unknown;
+  source: string;
+  note?: string;
+}
+
+export interface CitationRecord {
+  query: string;
+  model: string;
+  answerText: string;
+  mentioned: boolean;
+  mentionContext?: string;
+  citations: { url: string; title?: string; position?: number }[];
+  citationsStatus: ObservationStatus;
+  competitorsMentioned: string[];
+  observedAt: string;
+}
 
 export interface Observation<T = unknown> {
   id: string;
@@ -349,6 +379,8 @@ export interface Observation<T = unknown> {
 
   /** 被观测对象（与 Evidence.subject 同一 canonical 空间） */
   subject: string;
+  target?: string; // T1: target equivalent to subject
+  
   /** 观测来源（与 Evidence.source 同一 canonical 空间） */
   source: string;
   observedAt: string;
@@ -366,9 +398,13 @@ export interface Observation<T = unknown> {
   evidenceRefs: string[];
 
   status: ObservationStatus;
+  statusReason?: string; // T1: require statusReason when status != ok/OBSERVED
 
   /** 结论取值。结构的稳定性由 parserVersion 保证 */
   result: T;
+  data?: T; // T1: equivalent to result
+
+  extractedEvidence?: ExtractedEvidence[]; // T1: structured evidence signals
 
   /** 置信度。样本不完整时应为 low 而非 high */
   confidence: Confidence;

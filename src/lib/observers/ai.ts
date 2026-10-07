@@ -53,7 +53,7 @@
  * 换言之改 prompt 不会触发 `replaces` 链 —— S6 Diff 必须自己比对它。
  */
 import type { Store } from "../store";
-import type { Evidence, Observation, ObservationStatus } from "../evidence/types";
+import type { Evidence, Observation, ObservationStatus, ObservationKind } from "../evidence/types";
 import { OBSERVATION_CONTRACT_VERSION, isAiDeterminable } from "../evidence/types";
 import { aiSlotSubject, providerSource } from "../evidence/identity";
 /**
@@ -257,6 +257,35 @@ export async function recordAiObservation(
 
   try {
     const saved = await store.saveObservation(r.observation);
+    
+  // Save ai_citation if citation exists
+  if (input.probe.citation) {
+    try {
+      const citObs = {
+        id: crypto.randomUUID(),
+        contractVersion: OBSERVATION_CONTRACT_VERSION,
+        type: "ai_citation" as ObservationKind,
+        subject: r.observation.subject,
+        target: r.observation.subject,
+        source: r.observation.source,
+        observedAt: r.observation.observedAt,
+        runId: r.observation.runId,
+        observerVersion: AI_OBSERVER_VERSION,
+        parserVersion: AI_MENTION_PARSER_VERSION,
+        evidenceRefs: r.observation.evidenceRefs,
+        status: input.probe.citation.citationsStatus,
+        result: input.probe.citation,
+        data: input.probe.citation,
+        confidence: r.observation.confidence,
+        coverage: r.observation.coverage,
+        metadata: r.observation.metadata,
+      };
+      await store.saveObservation(citObs);
+    } catch(e) {
+      console.error("Failed to save ai_citation observation", e);
+    }
+  }
+
     return { ok: true, id: saved.id };
   } catch (e) {
     return {
@@ -265,3 +294,5 @@ export async function recordAiObservation(
     };
   }
 }
+
+
