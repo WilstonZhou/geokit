@@ -71,24 +71,32 @@ export function samplingProfile() {
   return { ...SAMPLING_PROFILE, parserVersion: AI_VISIBILITY_PARSER_VERSION };
 }
 
+/**
+ * 多 query 批量探测。
+ *
+ * `probe` 可注入 —— 测试传假探测函数即可覆盖「有引用 / 无引用 / 拒答 /
+ * 超时 / HTTP 错误」各分支，不必访问任何真实外网（T2 验收要求）。
+ * 默认走 runVisibilityMatrix：真实探测，单个 query 失败不影响其他 query。
+ */
 export async function batchProbeVisibility(
   brand: string,
   topics: string[],
-  concurrency: number = 2
+  concurrency: number = 2,
+  probe: (brand: string, topic: string) => Promise<VisibilityReport> = (b, t) =>
+    runVisibilityMatrix(b, t, collectProviderKeys())
 ): Promise<VisibilityReport[]> {
-  const keys = collectProviderKeys();
   const reports: VisibilityReport[] = [];
-  
+
   // A simple async pool for concurrency limit
   const runTasks = async () => {
     let i = 0;
-    const workers = Array(concurrency).fill(null).map(async () => {
+    const workers = Array(Math.max(1, concurrency)).fill(null).map(async () => {
       while (i < topics.length) {
         const idx = i++;
         const t = topics[idx];
         if (!brand.trim() || !t.trim()) continue;
         try {
-          const report = await runVisibilityMatrix(brand, t, keys);
+          const report = await probe(brand, t);
           reports.push(report);
         } catch (e) {
           console.error("Failed to probe visibility for " + t, e);
@@ -97,7 +105,7 @@ export async function batchProbeVisibility(
     });
     await Promise.all(workers);
   };
-  
+
   await runTasks();
   return reports;
 }

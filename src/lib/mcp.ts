@@ -21,7 +21,7 @@ import { analyzeRobots, analyzeLlmsTxt, generateLlmsTxtDraft } from "./llms";
  */
 import { searchRankings } from "./services/serp";
 import { probeVisibility, samplingProfile, batchProbeVisibility } from "./services/visibility";
-import { analyzeCitations } from "./visibility/aggregate";
+import { analyzeCitations, diffCitationRecords } from "./visibility/aggregate";
 import { extractCitations } from "./visibility/parser";
 import { checkUrl, checkHtml, autoFixHtml } from "./services/diagnosis";
 import { listObservationHistory, latestObservationDiff } from "./services/observations";
@@ -374,6 +374,17 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       for (const report of reports) {
         for (const probe of report.probes) {
           let cit = probe.citation;
+          if (cit && competitors.length > 0 && probe.rawResponse) {
+            // 竞品提及依赖调用方传入的竞品清单 —— 带着清单重新提取一次
+            cit = extractCitations(
+              probe.rawResponse,
+              cit.query,
+              cit.model,
+              probe.mentioned,
+              brand,
+              competitors
+            );
+          }
           if (!cit && probe.rawResponse) {
             cit = extractCitations(
               probe.rawResponse,
@@ -389,10 +400,29 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       }
 
       const aggregation = analyzeCitations(records, domain);
+
+      // T2 #6：与上一次观测 diff。存档为空时不编造，明确说明不可比
+      const history = await listObservationHistory(
+        new URLSearchParams({ type: "ai_citation", limit: "300", order: "desc" })
+      );
+      let changes: ReturnType<typeof diffCitationRecords> | null = null;
+      let diffNote: string | undefined;
+      if (history.ok && history.data.items.length > 0) {
+        const prevRecords = history.data.items
+          .map((o) => o.result as CitationRecord)
+          .filter((r) => r && typeof r === "object" && "query" in r && "model" in r);
+        changes = diffCitationRecords(prevRecords, records);
+      } else {
+        diffNote =
+          "存档中暂无更早的 ai_citation 观测，无法对比。开启 GEOKIT_EVIDENCE=on 并跑过至少两次后可用。";
+      }
+
       return {
         totalQueries: queries.length,
         totalRecords: records.length,
         aggregation,
+        changes,
+        diffNote,
       };
     }
 

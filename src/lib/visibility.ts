@@ -27,6 +27,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { extractCitations } from "./visibility/parser";
 import type { CitationRecord } from "./evidence/types";
 
 import { fetchWithPolicy, type FetchPurpose, type FetchResult } from "./fetcher";
@@ -610,6 +611,7 @@ async function runProbe(
     servedModel: parsed.servedModel,
     evidenceId,
     brand,
+    topic,
     elapsedMs,
   });
 }
@@ -640,9 +642,10 @@ function buildObservedProbe(args: {
   servedModel: string | null;
   evidenceId: string | null;
   brand: string;
+  topic: string;
   elapsedMs: number;
 }): VisibilityProbe {
-  const { base, text, servedModel, evidenceId, brand, elapsedMs } = args;
+  const { base, text, servedModel, evidenceId, brand, topic, elapsedMs } = args;
 
   // ── 第六态：INDETERMINATE（Phase 1 S5 落地）───────────────────
   // 拿到的是可解析的回答，但它不足以支撑「有没有提到」这个判断。
@@ -659,6 +662,8 @@ function buildObservedProbe(args: {
       excerpt: text.slice(0, 400),
       rawResponse: text,
       citedDomains: extractDomains(text),
+      // 拒答文本里通常没有链接 → citationsStatus=unavailable，原因随记录走
+      citation: extractCitations(text, topic, base.providerName, false, brand),
       servedModel,
       evidenceId,
       confidence: "unavailable",
@@ -677,6 +682,8 @@ function buildObservedProbe(args: {
     excerpt: text.slice(0, 400),
     rawResponse: text,
     citedDomains: extractDomains(text),
+    // T2：引用情报。URL 只来自响应文本里真实存在的链接，模型没给就是 unavailable
+    citation: extractCitations(text, topic, base.providerName, mentioned, brand),
     servedModel,
     evidenceId,
     confidence: "medium",

@@ -18,7 +18,7 @@ AIGC:
 ![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
 ![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
 ![Dependencies](https://img.shields.io/badge/direct%20deps-4-brightgreen)
-![MCP](https://img.shields.io/badge/MCP-12%20tools-blue)
+![MCP](https://img.shields.io/badge/MCP-13%20tools-blue)
 
 **中文优先的 SEO / GEO 工具**：自建百度 / 搜狗 / 360 / 神马 / 头条采集，
 六维 GEO 评分，九个 AI 模型的品牌可见性探测，以及一套 AI 抓取协议层。
@@ -51,8 +51,9 @@ open-seo 是个好项目 —— 28 万行代码、自研站点审计爬虫、完
 | --- | --- |
 | **多引擎 SERP 采集** | 百度、搜狗、360、神马、头条的自建采集与位次解析，外加 Google / Bing |
 | **页面审计 + GEO 评分** | 除传统技术检查外，输出六维「AI 引用友好度」评分 |
-| **中文 AI 可见性矩阵** | 九个模型并发探测品牌是否被提及 |
+| **中文 AI 可见性矩阵** | 九个模型并发探测品牌是否被提及，并升级为引用情报（谁被引用、引用了哪些来源、我的缺口在哪） |
 | **AI 抓取协议层** | robots.txt 的 20 个 AI 爬虫策略检测、llms.txt 校验与自动生成 |
+| **观测与存档** | 全通道 Observation 落库 + 不可变 Evidence 存证，时序 diff 识别提升与退化 |
 | **MCP Server** | 上述全部能力对外开放，两种传输方式 |
 
 ## 界面
@@ -152,10 +153,11 @@ POST http://localhost:3210/api/mcp
 }
 ```
 
-十二个工具：
+十三个工具：
 - 采集与审计：`list_engines`、`check_serp_ranking`、`audit_page`、`check_ai_visibility`
 - 诊断与修复：`diagnose_page`（全量诊断与体检）、`apply_fixes`（安全幂等自动修复）
-- 时序与数据：`query_history`（历史观测查询）、`diff_observations`（时序对比与退化判定）
+- 时序与数据：`list_observations`（历史观测查询，兼容别名 `query_history`）、`diff_observations`（时序对比与退化判定）
+- 引用情报：`analyze_ai_citations`（引用来源排行 / 竞品频次 / 引用缺口，附 evidence）
 - 协议与对比：`analyze_robots`、`analyze_llms_txt`、`generate_llms_txt`、`compare_with_openseo`
 
 典型 Agent 闭环：找排名缺口 → 页面深度诊断 → 自动应用修复 → 复查 AI 协议 → 历史比对确认退化/提升。
@@ -185,6 +187,58 @@ GEOkit 的选择是**如实返回 `status: "blocked"` 并写明原因与解决�
 缓存旧数据或随机数冒充真实排名。宁可让你知道「这次没抓到」，也不要让你基于假数据
 做出错的投放决策。这条原则贯穿每一个接口。
 
+## 观测与存档（Observation Store）
+
+GEOkit 遵循两层分离的数据契约：**Evidence（存证）**是原始请求 / 响应的不可变记录
+（append-only，永不改写）；**Observation（观测）**是基于 Evidence 的结构化结论，
+带 observer / parser 版本与状态，可随时重算追溯。
+
+默认**不写盘**。设置 `GEOKIT_EVIDENCE=on` 打开总闸后，以下通道会把结论落成 Observation：
+
+| kind | 来源通道 |
+| --- | --- |
+| `geo_score` | 页面审计 + GEO 评分 |
+| `rank` | 多引擎 SERP 排名 |
+| `ai_mention` / `ai_citation` | AI 可见性探测 / 引用情报 |
+| `robots_policy` / `llms_txt` | AI 抓取协议层（robots.txt / llms.txt） |
+
+存储实现（零新增依赖，接口抽象、可换驱动）：
+
+- 默认 JSONL，写入 `.evidence/`（已加入 `.gitignore`，不会进 git）；
+- `GEOKIT_STORE_DRIVER=sqlite` 切换为 Node 内置 `node:sqlite`；
+- `GEOKIT_STORE_DIR` 自定义存档目录；`GEOKIT_EVIDENCE_BODY=on` 额外留存响应体（默认 hash-only）。
+
+**schema 层强制约束**：`status` 为 `blocked` / `unavailable` / `error` 时 `statusReason`
+必填 —— 「抓不到就要说清为什么」在数据模型层强制执行，缺 reason 的观测写入即被拒绝。
+
+MCP 查询入口：`list_observations` 按 kind / subject / 时间过滤历史；
+`diff_observations` 对比两次观测的结构化差异（新增 / 消失 / 变化 + 证据），识别真实提升与退化。
+
+## AI 可见性与引用情报
+
+九个模型（DeepSeek / 豆包 / Kimi / 通义千问 / 文心一言 / 腾讯元宝 / ChatGPT / Claude / Gemini）
+并发探测品牌可见性。未配 key 的模型如实返回 `UNOBSERVABLE`，绝不伪造。
+
+### 引用数据可得性（以代码实际行为为准）
+
+对每个 (query, model)，GEOkit 从模型回答文本中提取**真实存在**的链接
+（Markdown 链接与裸 URL，含全角标点容错），产出 CitationRecord：
+
+- 答案中含链接 → `citationsStatus: "ok"`，附 url / title / 出现位置；
+- 答案不含链接 → `citationsStatus: "unavailable"` 并注明原因（「模型响应中未包含可提取的引用链接」）；
+- 模型拒答（HTTP 4xx）→ `blocked`；我方调用失败 → `error`。
+
+**严禁编造**：不向模型索要「记忆中的来源」，不用其他模型代答，无响应时不返回示例数据。
+是否在答案里给链接取决于各厂商行为（如 Kimi 联网搜索常带来源），GEOkit 只如实记录「给没给」，不试图补齐。
+
+### 批量、对比与聚合
+
+- 多 query 批量探测（并发上限可配置，默认保守值 2；探测函数可注入便于测试），单个模型失败不影响其他模型；
+- `/visibility` 页面提供 query × model 矩阵，`unavailable` / `blocked` 状态明确展示原因，不留空白；
+- 与上一次观测自动 diff：哪些模型新增 / 失去了提及或引用；
+- MCP 工具 `analyze_ai_citations` 输出引用来源排行、竞品出现频次、引用缺口
+  （被多个模型引用、但你的域名没出现的来源域名），每条结论附 evidence。
+
 ## 命令行与 CI 门禁（CLI）
 
 GEOkit 提供独立于 Web 服务的轻量级 CLI 工具（冷启动、确定性退出码、支持 GitHub Code Scanning SARIF 格式）：
@@ -209,11 +263,11 @@ npx tsx packages/cli/src/bin.ts diff --prev=prev.json --curr=curr.json
 
 - **分级测试体系**：
   - **Unit Tests（密封单元测试）**：位于 `tests/unit/`，纯内存、毫秒级、0 网络依赖，覆盖 HTML 容错解析、诊断规则库映射、修复幂等性、时序比对矩阵、GEO 双模型评分与断层跳级惩罚。
-  - **Integration Tests（集成测试）**：位于 `tests/integration/`，覆盖 12 个 MCP 协议交互、CLI 命令行与退出码、SARIF 2.1.0 规范契约。
+  - **Integration Tests（集成测试）**：位于 `tests/integration/`，覆盖 13 个 MCP 协议交互、CLI 命令行与退出码、SARIF 2.1.0 规范契约。
 - **基线回归门禁**：通过 `scripts/regression.ts` 对离线基线（`tests/baseline/baseline.json`）执行字节级一致性校验，防范算法静默漂移。
 
 ```bash
-npm test                  # 运行全量 88 项标准测试（耗时 < 1 秒）
+npm test                  # 运行全量 125 项标准测试（耗时 < 3 秒）
 npm run test:unit         # 纯单元测试
 npm run test:integration  # 集成测试
 npm run typecheck         # TypeScript 全量类型检查
@@ -243,7 +297,7 @@ src/
     serp.ts        多引擎采集与自然排名解析
     audit.ts       页面技术审计聚合
     llms.ts        robots.txt AI 策略分析 + llms.txt 规范校验与生成器
-    mcp.ts         MCP Server（支持 Streamable HTTP 与 stdio，提供 12 个核心工具）
+    mcp.ts         MCP Server（支持 Streamable HTTP 与 stdio，提供 13 个核心工具）
   app/
     api/           REST API 路由（audit, serp, visibility, llms, mcp, observations）
     (views)/       Next.js 现代化仪表盘（audit, serp, visibility, llms, mcp）

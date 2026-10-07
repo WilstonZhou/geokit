@@ -174,7 +174,7 @@ export function appendRecord(ev: RawEvidence, body?: string): void {
 export async function recordFetch<K extends RawEvidenceKind>(
   run: () => Promise<FetchResult>,
   kind: K
-): Promise<{ result: FetchResult; evidence: RawEvidence | null }> {
+): Promise<{ result: FetchResult; evidence: Evidence | null }> {
   const result = await run();
   if (!evidenceEnabled()) return { result, evidence: null };
   const ev = evidenceFromFetch(result, kind);

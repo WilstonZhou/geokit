@@ -10,6 +10,40 @@
 
 import { stripTags, getTitle, getMeta, getCanonical, findTags, absolutize, getDomain } from "./html";
 import { fetchWithPolicy } from "./fetcher";
+import { recordFetch } from "./evidence/store";
+import { createStore } from "./store";
+import type { Evidence } from "./evidence/types";
+import { recordRobotsObservation, recordLlmsTxtObservation } from "./observers/protocol";
+import type { Store } from "./store/types";
+
+/**
+ * T1：Evidence 落盘成功时把协议分析结论落成 Observation。
+ *
+ * evidence 为 null 只有两种可能：存证总闸关闭（默认 off），或根本没有素材。
+ * 与 audit / serp / ai 通道同一原则：无 Evidence 不产结论；
+ * 落库失败只记日志，绝不阻断分析结果返回。
+ */
+async function recordProtocolObservation(
+  evidence: Evidence | null,
+  kind: "robots" | "llms",
+  analysis: RobotsAnalysis | LlmsTxtAnalysis,
+  store?: Store
+): Promise<void> {
+  if (!evidence) return;
+  try {
+    const s = store ?? createStore();
+    const r =
+      kind === "robots"
+        ? await recordRobotsObservation(s, evidence, analysis as RobotsAnalysis)
+        : await recordLlmsTxtObservation(s, evidence, analysis as LlmsTxtAnalysis);
+    if (!r.ok) console.error("[geokit] Protocol Observation 未生成：", r.reason);
+  } catch (e) {
+    console.error(
+      "[geokit] Protocol Observation 落库失败：",
+      e instanceof Error ? e.message : e
+    );
+  }
+}
 
 export interface AiCrawler {
   /** robots.txt 里的 User-agent 值 */
@@ -156,22 +190,29 @@ export async function analyzeRobots(inputUrl: string): Promise<RobotsAnalysis> {
   }
 
   let txt: string | null = null;
+  let robotsEvidence: Evidence | null = null;
   try {
-    const r = await fetchWithPolicy({
-      url: robotsUrl,
-      // 沿用原有超时与 UA，收敛只改机制不改参数
-      timeoutMs: 10_000,
-      headers: { "User-Agent": "GEOkitBot/0.1 (+https://geokit.dev/bot)" },
-      purpose: "robots",
-      target: robotsUrl,
-    });
-    if (r.ok) txt = r.body;
+    // T1：采集与存证合并走 recordFetch —— 总闸关闭时行为与原实现完全一致
+    const rec = await recordFetch(
+      () =>
+        fetchWithPolicy({
+          url: robotsUrl,
+          // 沿用原有超时与 UA，收敛只改机制不改参数
+          timeoutMs: 10_000,
+          headers: { "User-Agent": "GEOkitBot/0.1 (+https://geokit.dev/bot)" },
+          purpose: "robots",
+          target: robotsUrl,
+        }),
+      "robots_txt"
+    );
+    robotsEvidence = rec.evidence;
+    if (rec.result.ok) txt = rec.result.body;
   } catch {
     // 抓取失败按「不存在」处理，但不谎称有
   }
 
   if (txt === null) {
-    return {
+    const missing: RobotsAnalysis = {
       url: robotsUrl,
       exists: false,
       raw: null,
@@ -184,6 +225,8 @@ export async function analyzeRobots(inputUrl: string): Promise<RobotsAnalysis> {
         "同时放置 llms.txt，向 AI 明确推荐你最希望被引用的内容。",
       ],
     };
+    await recordProtocolObservation(robotsEvidence, "robots", missing);
+    return missing;
   }
 
   const parsed = parseRobots(txt);
@@ -222,7 +265,7 @@ export async function analyzeRobots(inputUrl: string): Promise<RobotsAnalysis> {
   }
   recommendations.push("生成 llms.txt 并置于站点根目录 —— 这是当前向 AI 表达「优先引用哪些内容」最直接的方式。");
 
-  return {
+  const analysis: RobotsAnalysis = {
     url: robotsUrl,
     exists: true,
     raw: txt,
@@ -234,6 +277,8 @@ export async function analyzeRobots(inputUrl: string): Promise<RobotsAnalysis> {
       `封禁 ${blocked}、未指定 ${policies.filter((p) => p.policy === "unspecified").length}。AI 开放度为 ${score}。`,
     recommendations,
   };
+  await recordProtocolObservation(robotsEvidence, "robots", analysis);
+  return analysis;
 }
 
 function implicationText(c: AiCrawler, policy: CrawlerPolicy): string {
@@ -285,21 +330,34 @@ export async function analyzeLlmsTxt(inputUrl: string): Promise<LlmsTxtAnalysis>
   }
 
   let txt: string | null = null;
+  let llmsEvidence: Evidence | null = null;
   try {
-    const r = await fetchWithPolicy({
-      url,
-      timeoutMs: 10_000,
-      headers: { "User-Agent": "GEOkitBot/0.1 (+https://geokit.dev/bot)" },
-      purpose: "llms",
-      target: url,
-    });
-    if (r.ok) txt = r.body;
+    // T1：采集与存证合并走 recordFetch —— 总闸关闭时行为与原实现完全一致
+    const rec = await recordFetch(
+      () =>
+        fetchWithPolicy({
+          url,
+          timeoutMs: 10_000,
+          headers: { "User-Agent": "GEOkitBot/0.1 (+https://geokit.dev/bot)" },
+          purpose: "llms",
+          target: url,
+        }),
+      "llms_txt"
+    );
+    llmsEvidence = rec.evidence;
+    if (rec.result.ok) txt = rec.result.body;
   } catch {
     /* ignore */
   }
 
-  if (txt === null) return emptyLlmsTxt(url);
-  return analyzeLlmsTxtContent(url, txt);
+  if (txt === null) {
+    const missing = emptyLlmsTxt(url);
+    await recordProtocolObservation(llmsEvidence, "llms", missing);
+    return missing;
+  }
+  const analysis = analyzeLlmsTxtContent(url, txt);
+  await recordProtocolObservation(llmsEvidence, "llms", analysis);
+  return analysis;
 }
 
 export function analyzeLlmsTxtContent(url: string, txt: string): LlmsTxtAnalysis {

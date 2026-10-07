@@ -55,6 +55,7 @@
 import type { Store } from "../store";
 import type { Evidence, Observation, ObservationStatus, ObservationKind } from "../evidence/types";
 import { OBSERVATION_CONTRACT_VERSION, isAiDeterminable } from "../evidence/types";
+import { assertValidObservation, STATUSES_REQUIRING_REASON } from "../evidence/schema";
 import { aiSlotSubject, providerSource } from "../evidence/identity";
 /**
  * 类型来源。**刻意只做 type-only import** —— visibility.ts 会反向 import
@@ -257,34 +258,41 @@ export async function recordAiObservation(
 
   try {
     const saved = await store.saveObservation(r.observation);
-    
-  // Save ai_citation if citation exists
-  if (input.probe.citation) {
-    try {
-      const citObs = {
-        id: crypto.randomUUID(),
-        contractVersion: OBSERVATION_CONTRACT_VERSION,
-        type: "ai_citation" as ObservationKind,
-        subject: r.observation.subject,
-        target: r.observation.subject,
-        source: r.observation.source,
-        observedAt: r.observation.observedAt,
-        runId: r.observation.runId,
-        observerVersion: AI_OBSERVER_VERSION,
-        parserVersion: AI_MENTION_PARSER_VERSION,
-        evidenceRefs: r.observation.evidenceRefs,
-        status: input.probe.citation.citationsStatus,
-        result: input.probe.citation,
-        data: input.probe.citation,
-        confidence: r.observation.confidence,
-        coverage: r.observation.coverage,
-        metadata: r.observation.metadata,
-      };
-      await store.saveObservation(citObs);
-    } catch(e) {
-      console.error("Failed to save ai_citation observation", e);
+
+    // T2：探针带引用记录时，同步落一条 ai_citation Observation。
+    // 失败状态必须写明原因（schema 层强制校验）——「模型没给引用」要能
+    // 与「没测」区分开。落库失败只记日志，不影响 ai_mention 结论。
+    if (input.probe.citation) {
+      try {
+        const cit = input.probe.citation;
+        const citObs = {
+          id: crypto.randomUUID(),
+          contractVersion: OBSERVATION_CONTRACT_VERSION,
+          type: "ai_citation" as ObservationKind,
+          subject: r.observation.subject,
+          target: r.observation.subject,
+          source: r.observation.source,
+          observedAt: r.observation.observedAt,
+          runId: r.observation.runId,
+          observerVersion: AI_OBSERVER_VERSION,
+          parserVersion: AI_MENTION_PARSER_VERSION,
+          evidenceRefs: r.observation.evidenceRefs,
+          status: cit.citationsStatus,
+          statusReason: STATUSES_REQUIRING_REASON.includes(cit.citationsStatus)
+            ? "模型响应中未包含可提取的引用链接"
+            : undefined,
+          result: cit,
+          data: cit,
+          confidence: r.observation.confidence,
+          coverage: r.observation.coverage,
+          metadata: r.observation.metadata,
+        };
+        assertValidObservation(citObs);
+        await store.saveObservation(citObs);
+      } catch (e) {
+        console.error("Failed to save ai_citation observation", e);
+      }
     }
-  }
 
     return { ok: true, id: saved.id };
   } catch (e) {

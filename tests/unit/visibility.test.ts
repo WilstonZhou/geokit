@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { extractCitations } from "../../src/lib/visibility/parser";
-import { analyzeCitations } from "../../src/lib/visibility/aggregate";
+import { analyzeCitations, diffCitationRecords } from "../../src/lib/visibility/aggregate";
 import type { CitationRecord } from "../../src/lib/evidence/types";
 
 describe("T2: AI Citation Intelligence (Parser)", () => {
@@ -71,5 +71,73 @@ describe("T2: Citation Aggregate Analysis", () => {
     assert.equal(agg.citationGap[0].domain, "wikipedia.org");
 
     assert.equal(agg.competitorFrequency.length, 2);
+  });
+});
+
+describe("T2: Citation Diff（同一 query 集合前后两次观测）", () => {
+  function rec(
+    query: string,
+    model: string,
+    mentioned: boolean,
+    urls: string[],
+    observedAt: string
+  ): CitationRecord {
+    return {
+      query,
+      model,
+      answerText: "",
+      mentioned,
+      citations: urls.map((url) => ({ url })),
+      citationsStatus: urls.length > 0 ? "ok" : "unavailable",
+      competitorsMentioned: [],
+      observedAt,
+    };
+  }
+
+  it("新增提及 / 失去提及 / 无变化", () => {
+    const prev = [
+      rec("q1", "m1", false, ["https://a.com"], "2026-10-01T00:00:00Z"),
+      rec("q2", "m1", true, [], "2026-10-01T00:00:00Z"),
+      rec("q3", "m1", true, ["https://c.com"], "2026-10-01T00:00:00Z"),
+    ];
+    const cur = [
+      rec("q1", "m1", true, ["https://a.com"], "2026-10-02T00:00:00Z"),
+      rec("q2", "m1", false, [], "2026-10-02T00:00:00Z"),
+      rec("q3", "m1", true, ["https://c.com"], "2026-10-02T00:00:00Z"),
+    ];
+    const diff = diffCitationRecords(prev, cur);
+    const byQuery = new Map(diff.map((d) => [d.query, d]));
+    assert.equal(byQuery.get("q1")!.mention, "added");
+    assert.equal(byQuery.get("q2")!.mention, "lost");
+    assert.equal(byQuery.get("q3")!.mention, "unchanged");
+  });
+
+  it("引用 URL 的增加与消失", () => {
+    const prev = [rec("q", "m", true, ["https://old.com", "https://keep.com"], "2026-10-01T00:00:00Z")];
+    const cur = [rec("q", "m", true, ["https://new.com", "https://keep.com"], "2026-10-02T00:00:00Z")];
+    const [entry] = diffCitationRecords(prev, cur);
+    assert.deepEqual(entry.citationsAdded, ["https://new.com"]);
+    assert.deepEqual(entry.citationsLost, ["https://old.com"]);
+    assert.equal(entry.hasPrevious, true);
+  });
+
+  it("无前值时 hasPrevious=false，不做编造", () => {
+    const cur = [rec("q-new", "m", true, ["https://x.com"], "2026-10-02T00:00:00Z")];
+    const [entry] = diffCitationRecords([], cur);
+    assert.equal(entry.hasPrevious, false);
+    assert.equal(entry.mention, null);
+    assert.deepEqual(entry.citationsAdded, []);
+  });
+
+  it("当前运行刚写入存档的记录不会被误当成前值（observedAt 需严格更早）", () => {
+    const same = "2026-10-02T00:00:00Z";
+    const cur = [rec("q", "m", true, ["https://x.com"], same)];
+    // 前值集合里混入了本次运行的记录（observedAt 相同 / 更晚）→ 不可作为前值
+    const prev = [
+      rec("q", "m", false, ["https://stale.com"], same),
+      rec("q", "m", false, ["https://later.com"], "2026-10-03T00:00:00Z"),
+    ];
+    const [entry] = diffCitationRecords(prev, cur);
+    assert.equal(entry.hasPrevious, false);
   });
 });

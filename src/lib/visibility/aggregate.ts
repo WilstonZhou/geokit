@@ -55,3 +55,78 @@ export function analyzeCitations(
 
   return { domainRanking, competitorFrequency, citationGap };
 }
+
+/* ------------------------------------------------------------------ */
+/* 引用 diff：同一 query 集合前后两次观测（T2 #6）                        */
+/* ------------------------------------------------------------------ */
+
+export interface CitationDiffEntry {
+  query: string;
+  model: string;
+  /** false = 存档里没有更早的同 (query, model) 记录，无从比较 */
+  hasPrevious: boolean;
+  /** 相对上一次：新增提及 / 失去提及 / 无变化；无前值时为 null */
+  mention: "added" | "lost" | "unchanged" | null;
+  /** 本次新增的引用 URL */
+  citationsAdded: string[];
+  /** 上次有、本次消失的引用 URL */
+  citationsLost: string[];
+  prevCitationsStatus?: string;
+  citationsStatus: string;
+}
+
+/**
+ * 比较前后两批引用记录。
+ *
+ * 匹配键是 (query, model)。「前值」取 observedAt **严格早于** 当前记录的
+ * 最新一条 —— 这样当前运行刚写进存档的记录不会被误当成自己的前值。
+ */
+export function diffCitationRecords(
+  prev: CitationRecord[],
+  cur: CitationRecord[]
+): CitationDiffEntry[] {
+  return cur.map((c) => {
+    const candidates = prev
+      .filter(
+        (p) =>
+          p.query === c.query &&
+          p.model === c.model &&
+          Date.parse(p.observedAt) < Date.parse(c.observedAt)
+      )
+      .sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt));
+
+    const p = candidates[0];
+    if (!p) {
+      return {
+        query: c.query,
+        model: c.model,
+        hasPrevious: false,
+        mention: null,
+        citationsAdded: [],
+        citationsLost: [],
+        citationsStatus: c.citationsStatus,
+      };
+    }
+
+    const prevUrls = new Set(p.citations.map((x) => x.url));
+    const curUrls = new Set(c.citations.map((x) => x.url));
+
+    const mention =
+      p.mentioned === c.mentioned
+        ? "unchanged"
+        : c.mentioned
+          ? "added"
+          : "lost";
+
+    return {
+      query: c.query,
+      model: c.model,
+      hasPrevious: true,
+      mention,
+      citationsAdded: c.citations.filter((x) => !prevUrls.has(x.url)).map((x) => x.url),
+      citationsLost: p.citations.filter((x) => !curUrls.has(x.url)).map((x) => x.url),
+      prevCitationsStatus: p.citationsStatus,
+      citationsStatus: c.citationsStatus,
+    };
+  });
+}

@@ -13,6 +13,56 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
+## [Phase 2 T1/T2] — 2026-10-07 · 观测模型扩展（schema 强校验 + 协议观测落库）与 AI 引用情报
+
+> 目标：补齐 Phase 2 任务链 T1（Observation/Evidence/CitationRecord 数据模型 + 存档 + MCP 查询）与 T2（AI 引用情报）的验收缺口。核心原则不变：零新增依赖、「抓不到就说抓不到」在数据层强制执行、每条结论附 evidence。
+
+### 核心变更
+
+1. **zod 运行时校验模块（`src/lib/evidence/schema.ts`，新建）**：
+   - `ObservationSchema` / `ExtractedEvidenceSchema` / `CitationRecordSchema`。
+   - `superRefine` 强制：`status ∈ {blocked, unavailable, error, BLOCKED, ERROR, UNOBSERVABLE}` 时 `statusReason` 必填，缺失或全空白的观测写入即被拒绝（`assertValidObservation`），并提供 `validateObservation` 非抛出校验。
+   - Observer 落库前统一过 schema 校验（ai.ts / protocol.ts）。
+2. **协议观测落库（`src/lib/observers/protocol.ts`，新建）**：
+   - robots.txt → `robots_policy`、llms.txt → `llms_txt` 两条通道接入 Phase 1 S1 契约（补齐 T1 适配缺口；替代中断会话遗留的违反架构的 `adapter.ts` 死代码，已删除）。
+   - 状态映射：404/410 → `OBSERVED`（「文件不存在」是真实结论）；401/403/429 → `BLOCKED`；5xx → `ERROR`；无请求 → `UNOBSERVABLE`；失败状态均带 `statusReason`。
+   - `llms.ts` 的 robots / llms 采集改走 `recordFetch`（总闸 `GEOKIT_EVIDENCE=on` 才写盘，关闭时行为零变化），分析结论落库失败只记日志不阻断。
+3. **引用提取接线（T2 关键修复）**：
+   - `visibility.ts` 的 `buildObservedProbe` 填充 `citation`（此前 `probe.citation` 从未被赋值，`ai_citation` 落库永不触发）；`extractCitations` 补全角句号剥离，防止中文回答 URL 污染域名统计。
+   - `observers/ai.ts`：`ai_mention` 落库时同步落 `ai_citation` Observation；`citationsStatus` 为失败态时强制带 `statusReason`（「模型响应中未包含可提取的引用链接」）。
+   - 引用 URL 仅提取自模型响应文本中真实存在的链接（Markdown 链接 + 裸 URL），模型不提供时 `citationsStatus = "unavailable"`，严禁编造。
+4. **引用 diff 纯函数（`src/lib/visibility/aggregate.ts`）**：
+   - `diffCitationRecords(prev, cur)`：按 (query, model) 匹配，输出新增/失去提及与引用 URL 增减。
+   - 前值取 `observedAt` 严格早于当前记录的最新一条，防止本次运行刚写入存档的记录被误当前值。
+5. **批量探测可注入（`src/lib/services/visibility.ts`）**：
+   - `batchProbeVisibility` 增加第 4 个可注入 `probe` 参数（默认行为不变）；并发 workers 修正；单 query 失败隔离、空 query 跳过。
+6. **MCP 扩展（`src/lib/mcp.ts`）**：
+   - 新增 `analyze_ai_citations` 工具（第 13 个）：输入 queries/brand/domain/competitors，输出引用来源排行、竞品频次、引用缺口 + 每条结论 evidence + 与存档历史的 diff（`changes`；无存档时明示「无法对比」及开启条件）。
+   - `list_observations` 保留 `query_history` 兼容别名（case fallthrough，不在 tools/list 重复列出）。
+7. **`/visibility` 页面重写（`src/app/visibility/page.tsx`）**：
+   - 多 query 批量输入（textarea 每行一个，最多 10 个）与进度显示。
+   - query × model 矩阵表格：单元格展示提及状态 + 引用数徽标，`unavailable` / `blocked` 状态悬停显示原因，不留空白。
+   - 探针明细展示引用来源列表、竞品提及、提及上下文；统计卡跨 query 聚合。
+   - 修复既有 bug：`STATUS_TEXT` 缺 `INDETERMINATE` 键会在该状态下运行时崩溃。
+8. **测试扩充（125 项全量通过，较此前 +31）**：
+   - `tests/unit/observation-schema.test.ts`（新建）：statusReason 条件校验正反例、CitationRecord schema。
+   - `tests/unit/visibility-batch.test.ts`（新建）：注入假 probe 覆盖多态产出、失败隔离、并发上限、空 query。
+   - `tests/unit/diff.test.ts`：extractedEvidence 证据 diff 四情形（无变化/新增/删除/修改）。
+   - `tests/unit/visibility.test.ts`：引用 diff（新增/失去提及、URL 增减、无前值不编造、本次运行记录不误当前值）。
+   - `tests/integration/mcp.test.ts`：工具数 13、`analyze_ai_citations`、`query_history` 别名。
+9. **类型修正（`src/lib/evidence/store.ts`）**：`recordFetch` 返回类型 `RawEvidence | null` → `Evidence | null`（如实声明实际返回值，向后兼容）。
+10. **文档**：README 新增「观测与存档（Observation Store）」「AI 可见性与引用情报」章节（含各模型引用数据可得性说明），MCP 工具清单更新至 13 个，测试数与结构注释同步。
+
+### 验证
+
+- `npm test`：**125 项测试、47 个套件全量通过**（新增 schema 校验、批量探测注入、引用 diff 等用例）；
+- `npm run typecheck`：0 error；
+- `npm run lint`：0 error（8 个既有 warning，与本次改动无关）；
+- `npm run build`：Turbopack 生产编译成功（`/visibility` 静态生成正常）；
+- 存档目录 `.evidence/` 已在 `.gitignore`，默认总闸关闭不写盘。
+
+---
+
 ## [重构 Phase R4] — 2026-10-03 · 全链路模型版本切换与消费端（UI/CLI/MCP/API）深度打通
 
 > 目标：将 Phase R3 构建的 GEO 1.0.0 与 2.0.0 双版本模型，完整暴露给所有消费终端（CLI 命令行、MCP 智能体工具、HTTP API 与 Web 交互界面），形成“可随时切换、可比对验证、默认推荐 2.0.0 但严守 1.0.0 历史基线”的端到端能力闭环。

@@ -118,4 +118,56 @@ describe("Diff Engine (Unit Tests)", () => {
       assert.strictEqual(diff.summary.degraded, 0);
     });
   });
+
+  describe("5 extractedEvidence 证据对比（T1）", () => {
+    const evidenceChanges = (a: Observation, b: Observation) =>
+      diffObservations(a, b).changes.filter((c) => c.kind === "EVIDENCE");
+
+    it("无变化：两侧证据完全一致时不产生 EVIDENCE 变更", () => {
+      const a = sampleObs({
+        extractedEvidence: [{ signal: "jsonld.types", value: ["Article"], source: "html" }],
+      });
+      const b = sampleObs({
+        extractedEvidence: [{ signal: "jsonld.types", value: ["Article"], source: "html" }],
+      });
+      assert.strictEqual(evidenceChanges(a, b).length, 0);
+    });
+
+    it("新增：本次多出的信号记为 previous=null", () => {
+      const a = sampleObs({ extractedEvidence: [] });
+      const b = sampleObs({
+        extractedEvidence: [{ signal: "geo_score", value: 80, source: "audit" }],
+      });
+      const changes = evidenceChanges(a, b);
+      assert.strictEqual(changes.length, 1);
+      assert.strictEqual(changes[0].path, "extractedEvidence.geo_score");
+      assert.strictEqual(changes[0].previous, null);
+      assert.strictEqual(changes[0].current, 80);
+    });
+
+    it("删除：前次有、本次无的信号记为 current=null", () => {
+      const a = sampleObs({
+        extractedEvidence: [{ signal: "robots.GPTBot", value: "blocked", source: "robots_txt" }],
+      });
+      const b = sampleObs({ extractedEvidence: [] });
+      const changes = evidenceChanges(a, b);
+      assert.strictEqual(changes.length, 1);
+      assert.strictEqual(changes[0].path, "extractedEvidence.robots.GPTBot");
+      assert.strictEqual(changes[0].previous, "blocked");
+      assert.strictEqual(changes[0].current, null);
+    });
+
+    it("修改：同一信号取值变化时前后值都在", () => {
+      const a = sampleObs({
+        extractedEvidence: [{ signal: "llms.exists", value: false, source: "llms_txt" }],
+      });
+      const b = sampleObs({
+        extractedEvidence: [{ signal: "llms.exists", value: true, source: "llms_txt" }],
+      });
+      const changes = evidenceChanges(a, b);
+      assert.strictEqual(changes.length, 1);
+      assert.strictEqual(changes[0].previous, false);
+      assert.strictEqual(changes[0].current, true);
+    });
+  });
 });
