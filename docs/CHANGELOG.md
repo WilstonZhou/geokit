@@ -13,6 +13,52 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
+## [Phase 2 T12] — 2026-10-09 · 国际化 / hreflang 检查
+
+> 三种来源（HTML link / HTTP header / sitemap）统一解析 hreflang，六类检查规则，接入 T4 issues 结构。无多语言配置时返回「不适用」，不产生误报。
+
+### 核心变更
+
+**新增文件（5 个）**：
+- `src/lib/hreflang/types.ts` — HreflangEntry、PageInput、SitemapInput、HreflangCheckResult、HreflangAnalysis、BCP 47 合法性/规范化、CJK 语言检测常量
+- `src/lib/hreflang/extract.ts` — 三种来源解析（HTML link / HTTP Link 头 / sitemap XML xhtml:link）
+- `src/lib/hreflang/check.ts` — 六类检查：缺少自引用、缺少回链、语言代码非法、指向 4xx/跳转/noindex、与 canonical 冲突、x-default 缺失（low）；语言声明与内容不一致（规则驱动 CJK 占比，标注为「疑似」，独立于 hreflang）
+- `src/lib/hreflang/issues.ts` — HreflangCheckResult → SiteIssue 映射（接入 T4 issues 结构）
+- `src/lib/hreflang/index.ts` — 模块入口
+- `tests/unit/hreflang.test.ts` — 19 个用例（三种来源解析、回链双向/单向、六类检查、多语言缺失不误报、语言声明不一致）
+
+**修改文件（3 个）**：
+- `src/lib/crawler/issues.ts` — ISSUE_TYPES +7（hreflang-missing-self/reciprocal/invalid-lang/broken-target/canonical-conflict/missing-x-default/lang-mismatch）
+- `src/lib/mcp.ts` — +1 工具 `check_hreflang`（pages[]/sitemapXml），24→25
+- `tests/integration/mcp.test.ts` — 工具计数 24→25
+- `README.md` — badge 24→25，新增「国际化」分组
+
+### 设计原则
+
+1. **三种来源统一建模**：HTML link、HTTP header、sitemap XML 全部解析为 HreflangEntry（含 source 溯源）。
+2. **无多语言配置不误报**：站点无 hreflang 且无语言信号时返回 isMultilingual=false + 空 issues。
+3. **lang-mismatch 独立**：即使无 hreflang，html lang 与内容 CJK 占比不一致也会检测（标注为「疑似」）。
+4. **规则驱动不调 LLM**：所有检查为可复现的确定性规则。
+5. **只诊断不改站**：不做任何写回操作。
+
+### 验收对照
+
+- ✅ 三种来源各有解析测试（HTML/HTTP header/sitemap）
+- ✅ 回链检查有双向/单向用例
+- ✅ 站点无多语言配置时返回「不适用」，不产生误报
+- ✅ 接入 T4 issues 结构（SiteIssue 类型扩展）
+
+### 验证
+
+- typecheck ✅ · lint ✅ · test ✅（445/445，+19 新增）· build ✅
+- MCP 工具数 24→25，零新增依赖
+
+### 已知限制 / 待办
+
+- sitemap 来源解析基于简单正则，复杂嵌套 sitemap 可能不覆盖；后续可用 XML parser。
+- CJK 语言检测为简化规则（仅中英），其他语言对（如日/韩）需要扩展。
+- 未提供 /hreflang 页面（仅 MCP 工具），后续可补充可视化。
+
 ## [Phase 2 T11] — 2026-10-09 · Core Web Vitals / CrUX 性能观测
 
 > 接入 Chrome UX Report API，观测真实用户性能指标（LCP/INP/CLS/FCP/TTFB），差指标自动进入 Opportunity Engine。只观测、不修改站点。结论作为第 8 类机会 `poor-web-vitals` 进入 Opportunity Engine。

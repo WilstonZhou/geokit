@@ -53,6 +53,7 @@ import {
   buildSchemaDraft,
 } from "./schema";
 import { batchQueryCruxRaw, analyzeCruxBatch, recordCruxObservation } from "./crux";
+import { analyzeHreflang, type PageInput } from "./hreflang";
 import { createStore } from "./store";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
@@ -594,6 +595,41 @@ export const TOOLS: ToolDef[] = [
         concurrency: { type: "number", description: "并发上限（默认 2，遵守官方 150 QPM 限制）" },
         minIntervalMs: { type: "number", description: "同 host 最小请求间隔 ms（默认 500）" },
       },
+    },
+  },
+  {
+    name: "check_hreflang",
+    title: "hreflang 国际化检查",
+    description:
+      "检查多语言站点的 hreflang 配置：三种来源（HTML link / HTTP header / sitemap）统一解析；" +
+      "六类检查：缺少自引用、缺少回链、语言代码非法、指向 4xx/跳转/noindex、与 canonical 冲突、x-default 缺失；" +
+      "语言声明与内容不一致检测（规则驱动，标注为「疑似」）。" +
+      "站点无多语言配置时返回「不适用」，不产生误报。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pages: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              url: { type: "string", description: "页面 URL" },
+              html: { type: "string", description: "页面 HTML 原文" },
+              headers: { type: "object", description: "HTTP 响应头" },
+              canonical: { type: "string", description: "canonical URL" },
+              noindex: { type: "boolean", description: "是否有 noindex" },
+              httpStatus: { type: "number", description: "HTTP 状态码" },
+              redirectChain: { type: "array", items: { type: "string" }, description: "跳转链" },
+              htmlLang: { type: "string", description: "html lang 属性" },
+              textContent: { type: "string", description: "正文文本（用于语言检测）" },
+            },
+            required: ["url"],
+          },
+          description: "页面数据列表（调用方准备，可从 crawl_site 结果构建）",
+        },
+        sitemapXml: { type: "string", description: "sitemap XML 原文（可选，第三种来源）" },
+      },
+      required: ["pages"],
     },
   },
 ];
@@ -1300,6 +1336,43 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
           "CrUX 数据为 Chrome 真实用户采样（28 天滚动窗口）；" +
           "无数据时返回 unavailable，不返回估算值；" +
           "差指标已生成 poor-web-vitals 机会（调用 list_opportunities 查看）。",
+      };
+    }
+
+    case "check_hreflang": {
+      const pagesRaw = Array.isArray(args.pages) ? args.pages : [];
+      const pages: PageInput[] = pagesRaw
+        .filter((p): p is Record<string, unknown> => typeof p === "object" && p !== null)
+        .map((p) => ({
+          url: String(p.url ?? ""),
+          html: typeof p.html === "string" ? p.html : undefined,
+          headers: typeof p.headers === "object" && p.headers !== null ? (p.headers as Record<string, string>) : undefined,
+          canonical: typeof p.canonical === "string" ? p.canonical : undefined,
+          noindex: typeof p.noindex === "boolean" ? p.noindex : undefined,
+          httpStatus: typeof p.httpStatus === "number" ? p.httpStatus : undefined,
+          redirectChain: Array.isArray(p.redirectChain) ? p.redirectChain.filter((u): u is string => typeof u === "string") : undefined,
+          htmlLang: typeof p.htmlLang === "string" ? p.htmlLang : undefined,
+          textContent: typeof p.textContent === "string" ? p.textContent : undefined,
+        }))
+        .filter((p) => p.url.length > 0);
+
+      if (pages.length === 0) {
+        throw new Error("pages 数组不能为空，且每个元素必须包含 url");
+      }
+
+      const sitemapXml = typeof args.sitemapXml === "string" ? args.sitemapXml : undefined;
+
+      const result = analyzeHreflang(pages, sitemapXml);
+
+      return {
+        isMultilingual: result.isMultilingual,
+        issueCount: result.issues.length,
+        issues: result.issues,
+        pageCount: pages.length,
+        pageEntriesCount: result.pageEntries.size,
+        note: result.isMultilingual
+          ? `检测到 ${result.issues.length} 个 hreflang 问题，已接入 T4 issues 结构`
+          : "站点无多语言配置，返回「不适用」，不产生误报",
       };
     }
 

@@ -70,6 +70,13 @@ export const ISSUE_TYPES = [
   "low-geo-score",
   "weak-geo-dimension",
   "duplicate-content",
+  "hreflang-missing-self",
+  "hreflang-missing-reciprocal",
+  "hreflang-invalid-lang",
+  "hreflang-broken-target",
+  "hreflang-canonical-conflict",
+  "hreflang-missing-x-default",
+  "hreflang-lang-mismatch",
 ] as const;
 export type IssueType = (typeof ISSUE_TYPES)[number];
 

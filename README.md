@@ -18,7 +18,7 @@ AIGC:
 ![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
 ![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
 ![Dependencies](https://img.shields.io/badge/direct%20deps-4-brightgreen)
-![MCP](https://img.shields.io/badge/MCP-24%20tools-blue)
+![MCP](https://img.shields.io/badge/MCP-25%20tools-blue)
 
 **中文优先的 SEO / GEO 工具**：自建百度 / 搜狗 / 360 / 神马 / 头条采集，
 六维 GEO 评分，九个 AI 模型的品牌可见性探测，以及一套 AI 抓取协议层。
@@ -160,7 +160,7 @@ POST http://localhost:3210/api/mcp
 }
 ```
 
-24 个工具：
+25 个工具：
 - 采集与审计：`list_engines`、`check_serp_ranking`、`audit_page`、`check_ai_visibility`、`crawl_site`
 - 诊断与修复：`diagnose_page`（全量诊断与体检）、`apply_fixes`（安全幂等自动修复）
 - 时序与数据：`list_observations`（历史观测查询，兼容别名 `query_history`）、`diff_observations`（时序对比与退化判定）
@@ -172,6 +172,7 @@ POST http://localhost:3210/api/mcp
 - Query 情报：`analyze_query`、`cluster_queries`
 - 竞品：`compare_competitors`（五维对比）
 - Schema：`analyze_schema`（页面类型/字段/一致性/实体诊断）、`generate_schema_draft`（零编造 JSON-LD 草稿）
+- 国际化：`check_hreflang`（三种来源 hreflang 检查：自引用/回链/非法代码/坏链/canonical 冲突/x-default/语言声明疑似不一致）
 
 典型 Agent 闭环：找排名缺口 → 页面深度诊断 → 自动应用修复 → 复查 AI 协议 → 历史比对确认退化/提升。
 
