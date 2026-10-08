@@ -58,6 +58,13 @@ const CAPABILITIES = [
     href: "/crawl",
     highlight: "站点级结构洞察",
   },
+  {
+    icon: "↗",
+    title: "Search Console 搜索表现",
+    desc: "拉取真实 GSC Search Analytics，识别高曝光低点击、排名 4–20 位机会词与内容缺口。需自备 Google 凭证，未配置即明示不可用。",
+    href: "/gsc",
+    highlight: "真实搜索数据（可选）",
+  },
 ];
 
 export default function Home() {

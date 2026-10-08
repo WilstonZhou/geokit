@@ -24,6 +24,8 @@ AIGC:
 六维 GEO 评分，九个 AI 模型的品牌可见性探测，以及一套 AI 抓取协议层。
 全部能力通过 MCP 开放给 Agent。
 
+> 范围注：CLI / SARIF 门禁、`diagnose_page` 与 `apply_fixes` 超出 T0–T13 主线任务书，作为附带能力存在，不影响主线契约。
+
 **[为什么造它 →](docs/ANALYSIS.md)** · [贡献指南 →](CONTRIBUTING.md)
 
 GEOkit 源于对 [every-app/open-seo](https://github.com/every-app/open-seo) 的一次深度拆解。
@@ -306,6 +308,37 @@ severity 阈值是可读常量（`src/lib/crawler/issues.ts` 顶部导出，如
 - `crawl_site` MCP 输出新增 `issues` / `geoSummary` / `schemaCoverage`（仅新增字段，向后兼容）；
 - `/crawl` 页面可按严重度与类型筛选问题，点击展开查看受影响 URL 与证据。
 
+### Google Search Console 搜索表现（T5，可选）
+
+接入真实 Search Console Search Analytics，按 `query` / `page` / `country` / `device` / `date`
+维度拉取 clicks、impressions、ctr、position，自动分页（单页 1000、硬上限 25000 行）。
+
+**凭证（自备，零新增依赖，三选一，写进 `.env.local`）：**
+
+1. `GOOGLE_OAUTH_ACCESS_TOKEN` —— OAuth access token（约 1 小时有效）；
+2. `GOOGLE_SERVICE_ACCOUNT_JSON` —— service account JSON 内联，GEOkit 用 `node:crypto`
+   手工构造 RS256 JWT 向 Google 换取 access token 并按过期时间缓存；
+3. `GOOGLE_APPLICATION_CREDENTIALS` —— service account JSON 文件路径。
+
+service account 必须在对应 Search Console 资源里被添加为用户（资源可以是
+`sc-domain:example.com` 或 `https://example.com/`）。**凭证不写日志、不进存档。**
+
+未配置任何凭证时能力返回 `status=unavailable` 并说明配置方式；401/403/429 分别返回
+`blocked` 并写明原因（令牌无效 / 无资源权限 / 配额限流），5xx 与网络异常为 `error` —— 不编造任何数据。
+
+机会分析（`src/lib/gsc/analyze.ts`，纯函数，阈值为导出常量）识别三类机会：
+
+- **高曝光低 CTR**：展示量 ≥ 100 且 CTR < 2%；
+- **排名机会位**：平均位置 4–20 且展示量 ≥ 50；
+- **内容缺口**：GSC 显示某 URL 有曝光，但不在站点爬取集合中（需传 crawledUrls 交叉）。
+
+另有 `diffPeriods(prev, cur)` 对比两期，输出排名/点击显著升降与新增、消失的 key
+（低曝光样本自动降噪）。GSC 历史以 `kind="gsc"` 的 Observation 落库（受
+`GEOKIT_EVIDENCE` 总闸控制），只存四项聚合与 Top 100 行的结论粒度，不存全量明细。
+
+- MCP 工具：`get_search_performance`、`analyze_search_opportunities`；
+- 页面：`/gsc`（凭证缺失时直接展示三种配置方式）。
+
 ## 命令行与 CI 门禁（CLI）
 
 GEOkit 提供独立于 Web 服务的轻量级 CLI 工具（冷启动、确定性退出码、支持 GitHub Code Scanning SARIF 格式）：
@@ -326,7 +359,7 @@ npx tsx packages/cli/src/bin.ts diff --prev=prev.json --curr=curr.json
 
 ## 测试与工程质量（Google SWE 标准）
 
-全面拥抱 Node.js 20+ 原生 `node:test` + `node:assert/strict` 测试体系，**保持直接依赖零新增**：
+全面拥抱 Node.js 22+（engines `>=22.5`，因 `node:sqlite` 静态导入）原生 `node:test` + `node:assert/strict` 测试体系，**保持直接依赖零新增**：
 
 - **分级测试体系**：
   - **Unit Tests（密封单元测试）**：位于 `tests/unit/`，纯内存、毫秒级、0 网络依赖，覆盖 HTML 容错解析、诊断规则库映射、修复幂等性、时序比对矩阵、GEO 双模型评分与断层跳级惩罚。

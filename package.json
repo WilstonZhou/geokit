@@ -22,7 +22,7 @@
     "site-audit"
   ],
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=22.5.0"
   },
   "scripts": {
     "dev": "next dev -p 3210",

@@ -12,6 +12,7 @@ import { auditUrl } from "./audit";
 import { CN_ENGINES, GLOBAL_ENGINES, ENGINE_LIST, type EngineId } from "./engines";
 import { analyzeRobots, analyzeLlmsTxt, generateLlmsTxtDraft } from "./llms";
 import { crawlSite, analyzeSiteIssues } from "./crawler";
+import { getSearchPerformance, analyzeSearchPerformance, type GscDimension } from "./gsc";
 /**
  * Phase 0：工具实现不再直接调用采集层，一律走 services/*。
  *
@@ -175,6 +176,55 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "get_search_performance",
+    title: "Google Search Console 搜索表现",
+    description:
+      "拉取 Search Console Search Analytics（query/page/country/device 维度的 clicks、impressions、ctr、position），自动分页。" +
+      "需要自备凭证（GOOGLE_OAUTH_ACCESS_TOKEN 或 GOOGLE_SERVICE_ACCOUNT_JSON / GOOGLE_APPLICATION_CREDENTIALS）。" +
+      "未配置返回 status=unavailable 并说明配置方式；401/403/429 分别返回 blocked 并写明原因，不编造任何数据。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        siteUrl: { type: "string", description: "Search Console 资源，如 sc-domain:example.com 或 https://example.com/" },
+        startDate: { type: "string", description: "起始日期 YYYY-MM-DD，缺省为 28 天前" },
+        endDate: { type: "string", description: "结束日期 YYYY-MM-DD，缺省为今天" },
+        dimensions: {
+          type: "array",
+          items: { type: "string", enum: ["query", "page", "date", "country", "device"] },
+          description: "维度，缺省 [\"query\"]",
+        },
+        rowLimit: { type: "number", description: "每页行数（默认 1000，硬上限 25000）" },
+      },
+      required: ["siteUrl"],
+    },
+  },
+  {
+    name: "analyze_search_opportunities",
+    title: "GSC 搜索机会分析",
+    description:
+      "基于 Search Analytics 识别三类机会：高曝光低 CTR、排名 4–20 位的机会词、内容缺口（需传 crawledUrls 交叉）。" +
+      "每个机会带触发阈值证据与一句话建议。凭证要求与状态语义同 get_search_performance。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        siteUrl: { type: "string", description: "Search Console 资源" },
+        startDate: { type: "string", description: "YYYY-MM-DD，缺省 28 天前" },
+        endDate: { type: "string", description: "YYYY-MM-DD，缺省今天" },
+        dimensions: {
+          type: "array",
+          items: { type: "string", enum: ["query", "page", "date", "country", "device"] },
+          description: "维度，缺省 [\"query\"]；做内容缺口建议含 \"page\"",
+        },
+        crawledUrls: {
+          type: "array",
+          items: { type: "string" },
+          description: "可选：本站已爬取的 URL 列表，用于识别有曝光但站内缺失的页面",
+        },
+      },
+      required: ["siteUrl"],
+    },
+  },
+  {
     name: "analyze_robots",
     title: "分析 robots.txt 的 AI 策略",
     description:
@@ -312,6 +362,41 @@ export const TOOLS: ToolDef[] = [
 /* ------------------------------------------------------------------ */
 /* Tool 实现                                                           */
 /* ------------------------------------------------------------------ */
+
+const GSC_VALID_DIMS = new Set<GscDimension>([
+  "query",
+  "page",
+  "date",
+  "country",
+  "device",
+]);
+
+function isoDate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/** GSC 日期默认最近 28 天（含今天） */
+function resolveGscDates(
+  start?: unknown,
+  end?: unknown
+): { startDate: string; endDate: string } {
+  const today = new Date();
+  const defaultEnd = isoDate(today);
+  const defaultStart = isoDate(new Date(today.getTime() - 27 * 86_400_000));
+  return {
+    startDate: typeof start === "string" && start ? start : defaultStart,
+    endDate: typeof end === "string" && end ? end : defaultEnd,
+  };
+}
+
+/** 白名单过滤维度；空/非法回退 undefined（客户端用默认 ["query"]） */
+function normalizeGscDims(v: unknown): GscDimension[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const dims = v.filter(
+    (x): x is GscDimension => typeof x === "string" && GSC_VALID_DIMS.has(x as GscDimension)
+  );
+  return dims.length > 0 ? Array.from(new Set(dims)) : undefined;
+}
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
@@ -534,6 +619,41 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
         geoSummary: analysis.geoSummary,
         schemaCoverage: analysis.schemaCoverage,
       };
+    }
+
+    case "get_search_performance": {
+      const siteUrl = String(args.siteUrl ?? "").trim();
+      if (!siteUrl) throw new Error("缺少 siteUrl");
+      const { startDate, endDate } = resolveGscDates(args.startDate, args.endDate);
+      const dimensions = normalizeGscDims(args.dimensions);
+      const rowLimit =
+        args.rowLimit !== undefined ? Number(args.rowLimit) : undefined;
+      return await getSearchPerformance({
+        siteUrl,
+        startDate,
+        endDate,
+        ...(dimensions ? { dimensions } : {}),
+        ...(rowLimit !== undefined && !Number.isNaN(rowLimit) ? { rowLimit } : {}),
+      });
+    }
+
+    case "analyze_search_opportunities": {
+      const siteUrl = String(args.siteUrl ?? "").trim();
+      if (!siteUrl) throw new Error("缺少 siteUrl");
+      const { startDate, endDate } = resolveGscDates(args.startDate, args.endDate);
+      const dimensions = normalizeGscDims(args.dimensions);
+      const crawledUrls = Array.isArray(args.crawledUrls)
+        ? args.crawledUrls.filter((u): u is string => typeof u === "string")
+        : undefined;
+      return await analyzeSearchPerformance(
+        {
+          siteUrl,
+          startDate,
+          endDate,
+          ...(dimensions ? { dimensions } : {}),
+        },
+        { crawledUrls }
+      );
     }
 
     case "analyze_robots": {

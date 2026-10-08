@@ -24,7 +24,7 @@ async function callMcpTool(name: string, args: Record<string, unknown> = {}) {
 }
 
 describe("MCP Server Integration Tests", () => {
-  it("tools/list lists all 14 registered tools", async () => {
+  it("tools/list lists all 16 registered tools", async () => {
     const listRes = (await handleJsonRpc({
       jsonrpc: "2.0",
       id: "init",
@@ -34,12 +34,14 @@ describe("MCP Server Integration Tests", () => {
     const tools = listRes.result.tools;
     const names = tools.map((t) => t.name);
 
-    assert.strictEqual(tools.length, 14);
+    assert.strictEqual(tools.length, 16);
     assert.ok(names.includes("list_engines"));
     assert.ok(names.includes("check_serp_ranking"));
     assert.ok(names.includes("audit_page"));
     assert.ok(names.includes("check_ai_visibility"));
     assert.ok(names.includes("crawl_site"));
+    assert.ok(names.includes("get_search_performance"));
+    assert.ok(names.includes("analyze_search_opportunities"));
     assert.ok(names.includes("analyze_robots"));
     assert.ok(names.includes("analyze_llms_txt"));
     assert.ok(names.includes("generate_llms_txt"));

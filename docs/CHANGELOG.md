@@ -13,6 +13,55 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
+## [Phase 2] 元修复 — 2026-10-08 · engines 声明与方案外范围澄清
+
+> 经用户审阅发现的两项修正：(1) `engines.node` 与 `node:sqlite` 静态导入实际需求不符；(2) `apply_fixes` / `diagnose_page` / CLI / SARIF 超出 T0–T13 主线任务书，需明确范围归属。
+
+### 核心变更
+
+1. **`package.json` `engines.node`**：`>=20.9.0` → `>=22.5.0`。原因：`src/lib/store/sqlite.ts:44` 静态 `import { DatabaseSync } from "node:sqlite"`，`src/lib/store/index.ts:11` 静态 `import { SqliteStore } from "./sqlite"`，即便默认 `jsonl` 驱动也会因进程加载 `store/index.ts` 而触发 `node:sqlite` 解析；该模块在 Node 22.5 之前不存在，Node 20 会启动崩溃。CI 与本地均为 Node 22，未暴露此问题。`sqlite.ts` 既有注释已写明「代价是 Node ≥ 22.5 —— 这条写进文档，不藏在实现里」，本次修正与原设计意图一致。
+2. **`README.md`**：(a) 介绍段加「范围注」，声明 CLI / SARIF / `diagnose_page` / `apply_fixes` 超出 T0–T13 主线，作为附带能力存在，不影响主线契约；(b) 测试章节「Node.js 20+」改为「Node.js 22+（engines `>=22.5`，因 `node:sqlite` 静态导入）」。
+3. **方案外功能决策（经用户确认）**：`apply_fixes` / `diagnose_page` / CLI / SARIF **全部保留**。`apply_fixes` 仅改传入的 HTML 字符串、不碰生产站点，未违反「不自动改用户内容」原则；`diagnose_page` 为 `apply_fixes` 的离线诊断前置；CLI/SARIF 为本地与 CI 门禁场景的复用入口。撤回是损失而非收益。
+
+### 验证
+
+- 改动仅 `package.json` 一行 + README 文案，无运行时代码变更；四门禁随后跑。
+
+### 不在范围
+
+- 未改为按需动态导入 sqlite（方案 b 被舍弃：动态 import 在 Next.js 打包里可能踩坑，且与原设计「代价写进文档」的取舍相反）。
+
+---
+
+## [Phase 2 T5] — 2026-10-08 · Google Search Console 接入（可选能力，自备凭证）
+
+> 方案决策（经用户确认）：(a) 凭证经环境变量传入，零新增依赖。未配置即 unavailable，不影响其他功能。
+
+### 核心变更
+
+1. **新增 `src/lib/gsc/` 模块**：
+   - `auth.ts`：凭证解析（`GOOGLE_OAUTH_ACCESS_TOKEN` / `GOOGLE_SERVICE_ACCOUNT_JSON` 内联 / `GOOGLE_APPLICATION_CREDENTIALS` 文件路径），service account 用 `node:crypto` 手工构造 **RS256 JWT** 向 Google 换取 access token，按过期时间缓存（提前 60s 续）。`buildServiceAccountJwt` 为纯函数可单测。
+   - `client.ts`：Search Analytics 查询，自动分页（单页 1000、硬上限 25000），小写四态分类 —— ok / blocked（401 令牌无效、403 无资源权限、429 限流）/ unavailable（未配置）/ error（5xx、网络、非法入参）；HTTP 状态装进结果不抛错。
+   - `analyze.ts`：纯函数机会分析 —— 高曝光低 CTR（曝光≥100 且 CTR<2%）、排名机会位（位置 4–20 且曝光≥50）、内容缺口（与爬取 URL 集合交叉，容忍 host 大小写与尾斜杠、保留路径大小写）、`diffPeriods` 两期对比（显著升降 + 新增/消失 key，低曝光降噪）。阈值全部导出为常量。
+   - `observe.ts` / `index.ts`：`kind="gsc"` Observation 落库（受 `GEOKIT_EVIDENCE` 总闸控制），只存站点/日期范围/维度/行数/四项聚合/Top 100 行的结论粒度，不存全量明细。
+2. **安全红线**：access token / 私钥 / JWT assertion 绝不写入日志、错误消息、Observation；错误仅含状态码与非敏感描述；`describe()` 只暴露凭证类型与 service account 邮箱。
+3. **MCP（14→16）**：`get_search_performance`、`analyze_search_opportunities`，日期缺省最近 28 天，维度白名单过滤；未配置/无权限返回显式状态对象。
+4. **页面/API**：新增 `/api/gsc`（服务端计算，unavailable 也返回 200 由前端给配置指引）与 `/gsc` 页面（汇总 Stat、机会列表带阈值证据与建议、明细表）；首页加导航卡片。
+5. **测试**：`gsc-analyze.test.ts`（四类信号命中/不命中 + diff）、`gsc-auth.test.ts`（用真实生成的 RSA 密钥对验证 RS256 签名可被公钥验证、令牌缓存、401/网络错误不泄密、三种凭证来源）、`gsc.test.ts` 集成（成功/分页/空数据/401/403/429/5xx/网络异常/取令牌失败/非法入参/未配置凭证）。
+6. `.env.example` 增加三种 GSC 凭证配置样例与 service account 授权提示。
+
+### 验证
+
+- `npm test` 全量通过（+38）；typecheck / lint 0 error；`npm run build` 成功（新增 `/gsc`、`/api/gsc`）。
+
+### 已知限制 / 待办（建议）
+
+- OAuth access token 方式约 1 小时过期需手动更换；长期自动化建议用 service account。
+- 内容缺口目前需要调用方传入 crawledUrls，`/gsc` 页面暂未内置「先爬取再交叉」的串联 UI（可作为后续体验增强）。
+- 未实现方案 (b) 本地 OAuth loopback 授权流（serverless 不适用，经决策舍弃）。
+
+---
+
 ## [Phase 2 T4] — 2026-10-08 · 站点级问题聚合（8 类规则 + 证据 + 疑似重复检测）
 
 > 全部纯函数，输入 T3 的 CrawlResult，输出带 evidence 的问题列表。不调模型、不做 IO。
