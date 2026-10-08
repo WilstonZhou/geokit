@@ -46,3 +46,8 @@ tmp/
 # 本地 SQLite 数据库（GEOKIT_STORE_DRIVER=sqlite 时生成）
 # 包含观测时序数据，不进版本库
 *.db
+
+# Trae 本地工作目录（计划草稿等本地状态不进版本库）
+# 仅共享团队 skills
+.trae/*
+!.trae/skills/
