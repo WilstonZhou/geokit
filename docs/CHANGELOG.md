@@ -13,6 +13,58 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
+## [Phase 2 T9] — 2026-10-08 · 内容质量信号增强（scoringVersion 2.1.0）
+
+> 并入现有 GEO 六维体系，不新增并行总分；新增 `scoringVersion` 字段防止历史 diff 被规则换代污染。
+
+### 评分变更说明
+
+**版本字段**：新增 `scoringVersion`（评分规则细粒度版本），区别于 `geoVersion`（模型代际 "1.0.0"|"2.0.0"，用户可选）。
+- v1 模型 → `scoringVersion: "1.0.0"`（冻结基线，不动）
+- v2 模型 → `scoringVersion: "2.0.0"` → **"2.1.0"**（T9 升级）
+- diff 引擎：`scoringVersion` 不同时发 `VERSION` change + note，**保持 comparable**（分数 delta 仍可见，但带 caveat），不硬阻断；历史观测缺字段时按 `geoVersion` 推断初版规则。
+- 不动 `AUDIT_PARSER_VERSION`（11 项检查结构未变；评分口径由 `scoringVersion` 单独追踪）。
+
+**新信号（5 个，各维 max 与总分 100 不变，子权重内部重分配）**：
+
+| 维度 | 新信号 | 检测规则 | 子权重让权 | 权重影响 |
+| --- | --- | --- | --- | --- |
+| 可引用性 | 1.6 FAQ/Q&A 结构 | FAQPage JSON-LD 或 ≥2 个疑问句 heading + 答案块 | 1.1(8→7)/1.2(6→5)/1.3(5→4) | +3 |
+| 结构化 | 2.5 结构化元素密度 | (listItems + tables*3) / max(paragraphs,1) | 2.1(6→5)/2.4(4→3) | +2 |
+| 实体清晰度 | 3.5 作者权威链接 | author.sameAs 或 article:author + 作者主页 a | 3.2(4→3)/3.3(3→2) | +2 |
+| 可抓取性 | — | 页面级信号已饱和，不新增 | — | 0 |
+| 事实密度 | 5.4 权威来源 | 外链含 .gov/.edu/.mil | 5.2(5→4)/5.3(4→3) | +2 |
+| 可读性/时效 | 6.3 更新时间一致性 | modified >= published 且距今 ≤365 天 | 6.1(5→4)/6.2(5→4) | +2 |
+
+**evidence 呈现**：`ContentShape` 新增 5 个可选字段；`GeoResult.breakdown.comment` 体现新信号；recommendations 针对新弱项给出 2026 针对性建议。
+
+**竞品复用**：T8 `competitor/geo.ts` 已用 `auditUrl({geoVersion:"2.0.0"})`，自动获得新信号，无需改码。
+
+### 核心变更
+
+**修改文件（6 个）**：
+- `src/lib/geo/types.ts` — ContentShape +5 可选字段；JsonLdInfo +hasFaqPage/hasAuthorSameAs；GeoResult +scoringVersion
+- `src/lib/audit.ts` — analyzeContentShape 检测 5 信号（签名 +ld/+allMeta）；extractJsonLdInfo 增强（FAQPage/author sameAs）；PageAudit +scoringVersion；analyze/emptyAudit 透传
+- `src/lib/geo/v2.ts` — 5 信号入分 + 子权重重分配 + scoringVersion="2.1.0" + breakdown comment/recommendations 更新
+- `src/lib/geo/v1.ts` — scoringVersion="1.0.0"（冻结基线）
+- `src/lib/diff.ts` — `diffScoringVersion` 软提示（comparable + VERSION note，按 geoVersion 推断历史初版）
+- `tests/unit/geo.test.ts` + `tests/unit/diff.test.ts` — 每个新信号正/反例 + scoringVersion diff 提示 3 例
+
+**无新增文件，无新增依赖。**
+
+### 验证
+
+- typecheck ✅
+- lint ✅（0 errors，9 pre-existing warnings）
+- test ✅ 366/366 pass（+14 new）
+- build ✅
+
+### 已知限制 / 待办（建议）
+
+- `hasDateConsistency` 的「距今 ≤1 年」基于 `Date.now()`，长周期回归需固定时间（测试用近 1 年内固定日期规避）
+- 作者权威链接的 `hasAuthorHomepageLink` 路径匹配较宽（author/about/profile/bio），极端情况可能误命中
+- 第 4 维（可抓取性）未补信号 —— llms.txt 等属站点级非页面可观测，留给后续站点级评分模型
+
 ## [Phase 2 T8] — 2026-10-08 · 竞品情报
 
 > 五维竞品对比：SERP 位次 / AI 提及 / GEO 评分 / AI 抓取协议 / 结构化数据。不做反链。

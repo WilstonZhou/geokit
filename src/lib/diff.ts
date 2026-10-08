@@ -569,6 +569,45 @@ function diffStrategyVersion(prev: Observation, cur: Observation): DiffChange | 
   };
 }
 
+/**
+ * ★ T9: scoringVersion 软提示。
+ *
+ * `scoringVersion` 跟踪 GEO 评分子规则的演进（如 v2.0.0 → v2.1.0 新增信号）。
+ * 与 `parserVersion` 的硬阻断不同，这里**保持 comparable** ——
+ * 分数 delta 仍可见，但附加一条 caveat，明确「涨跌含规则换代成分」。
+ *
+ * 历史观测若缺 scoringVersion（T9 之前落库的记录），按其 geoVersion 推断
+ * 该代际的初版规则（v1→"1.0.0"，v2→"2.0.0"），让新旧比对仍能给出提示。
+ */
+function diffScoringVersion(prev: Observation, cur: Observation): DiffChange | null {
+  // 仅对 geo_score 类型有意义 —— 其它 kind 没有 scoringVersion 概念
+  if (cur.type !== "geo_score") return null;
+
+  const infer = (o: Observation): string | null => {
+    const explicit = getPath(o, "result.scoringVersion");
+    if (typeof explicit === "string" && explicit) return explicit;
+    // 历史记录无 scoringVersion：按 geoVersion 推断初版规则
+    const gv = getPath(o, "result.geoVersion") ?? getPath(o, "result.version");
+    if (typeof gv !== "string" || !gv) return null;
+    return gv === "2.0.0" ? "2.0.0" : gv === "1.0.0" ? "1.0.0" : null;
+  };
+
+  const a = infer(prev);
+  const b = infer(cur);
+  if (a === b) return null;
+  // 两边都推断不出来 → 无从比较，不发声
+  if (a === null && b === null) return null;
+
+  return {
+    kind: "VERSION",
+    path: "result.scoringVersion",
+    previous: a,
+    current: b,
+    direction: "unknown",
+    note: `评分规则版本变化（${a ?? "未标注"} → ${b ?? "未标注"}）—— 分数涨跌含规则换代成分，不纯反映站点真实表现变化`,
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /* 主入口（纯函数）                                                    */
 /* ------------------------------------------------------------------ */
@@ -711,6 +750,10 @@ export function diffObservations(
 
   const versionChange = diffStrategyVersion(previous, cur);
   if (versionChange) changes.push(versionChange);
+
+  // ★ T9: scoringVersion 软提示 —— 保持 comparable，仅附加 caveat
+  const scoringChange = diffScoringVersion(previous, cur);
+  if (scoringChange) changes.push(scoringChange);
 
   const evidenceChange = diffEvidenceRefs(previous, cur);
   if (evidenceChange) changes.push(evidenceChange);

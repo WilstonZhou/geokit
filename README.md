@@ -119,12 +119,17 @@ GEOkit 提供两套严格版本化的 `geoScore` 评分模型（可在 Web UI、
 
 | 维度 | 权重 | 2026 评估信号 |
 | --- | --- | --- |
-| 可引用性 Quotability | 25 | 首屏直接回答（Direct Answer 100-200 字）、对比表格、步骤列表、硬核量化数据点 |
-| 结构化/RAG 切块 Structuredness | 20 | 标题层级连续性（**严格递进，H1->H3/H4 跳级惩罚**以保护 RAG 分块树）、`<main>`/`<article>` 语义地标 |
-| 实体清晰度/消歧 Entity Clarity | 15 | 大模型知识图谱消歧（JSON-LD `sameAs`/`identifier`）、明确作者与双时间戳锚点 |
+| 可引用性 Quotability | 25 | 首屏直接回答（Direct Answer 100-200 字）、对比表格、步骤列表、硬核量化数据点、**FAQ/Q&A 结构** |
+| 结构化/RAG 切块 Structuredness | 20 | 标题层级连续性（**严格递进，H1->H3/H4 跳级惩罚**以保护 RAG 分块树）、`<main>`/`<article>` 语义地标、**结构化元素密度** |
+| 实体清晰度/消歧 Entity Clarity | 15 | 大模型知识图谱消歧（JSON-LD `sameAs`/`identifier`）、明确作者与双时间戳锚点、**作者权威链接** |
 | 可抓取性/AI 协议 Crawlability | 15 | AI 爬虫通道放行、显式 `lang` 语言声明（指导多语言 Embedding 向量分词路由） |
-| 事实密度/增益 Fact Density | 15 | 信息增益（Information Gain）、每千字量化数据指标、一手权威参考引用 |
-| 分块适配/时效 Readability & Freshness | 10 | 大模型滑动窗口与注意力集中最优句长（15-45 字符区间）、最新修订时间戳 |
+| 事实密度/增益 Fact Density | 15 | 信息增益（Information Gain）、每千字量化数据指标、一手权威参考引用、**gov/edu 权威来源** |
+| 分块适配/时效 Readability & Freshness | 10 | 大模型滑动窗口与注意力集中最优句长（15-45 字符区间）、最新修订时间戳、**更新时间一致性** |
+
+> **scoringVersion 2.1.0（T9 内容质量增强）**：在六维 max 与总分 100 不变前提下，
+> 并入 5 个新页面级可观测信号（上表加粗项）。各维内部子权重重分配，不新增并行总分。
+> 每条观测记录携带 `scoringVersion` 字段，diff 引擎识别版本不同时保持可比并附加 caveat，
+> 避免历史比对被规则换代污染。第 4 维（可抓取性）页面级信号已饱和，不新增。
 
 ### GEO 1.0.0（经典基线模式）
 

@@ -73,6 +73,13 @@ export interface PageAudit {
   geoBreakdown: GeeBreakdown[];
   /** 评估所使用的 GEO 模型版本（如 "1.0.0" 或 "2.0.0"） */
   geoVersion?: GeoVersion;
+  /**
+   * 评分规则细粒度版本（如 "1.0.0" / "2.0.0" / "2.1.0"）。
+   *
+   * 与 `geoVersion` 的区别见 `GeoResult.scoringVersion` 注释。
+   * diff 引擎读取此字段识别评分口径变化，避免历史比对被规则换代污染。
+   */
+  scoringVersion?: string;
   recommendations: string[];
   /**
    * 本次审计对应的 `page_html` Evidence id（Phase 1 S3）。
@@ -282,6 +289,9 @@ export function emptyAudit(
     geoScore: 0,
     geoBreakdown: [],
     geoVersion: opts?.geoVersion ?? "1.0.0",
+    // 空审计无内容可评分，scoringVersion 标记「若能评」所对应的规则版本，
+    // 便于 diff 在历史比对时识别口径（与该 geoVersion 的当前规则对齐）。
+    scoringVersion: (opts?.geoVersion ?? "1.0.0") === "2.0.0" ? "2.1.0" : "1.0.0",
     recommendations: ["先解决页面可访问性，无法抓取时其余评分无从谈起。"],
   };
 }
@@ -341,7 +351,7 @@ export function analyze(
   }).length;
 
   const bodyText = extractBodyText(html);
-  const contentShape = analyzeContentShape(html, bodyText, headings);
+  const contentShape = analyzeContentShape(html, bodyText, headings, ld, allMeta);
   const wordCount = countWords(bodyText);
 
   const hreflang = findTags(html, ["link"])
@@ -513,6 +523,7 @@ export function analyze(
     geoScore: geo.total,
     geoBreakdown: geo.breakdown,
     geoVersion: geo.version,
+    scoringVersion: geo.scoringVersion,
     recommendations: geo.recommendations,
   };
 }
@@ -547,7 +558,9 @@ function countWords(text: string): number {
 function analyzeContentShape(
   html: string,
   text: string,
-  headings: { level: number; text: string }[] = []
+  headings: { level: number; text: string }[] = [],
+  ld?: JsonLdInfo,
+  allMeta?: Record<string, string>
 ): ContentShape {
   const ul = findTags(html, ["ul", "ol"]).length;
   const li = findTags(html, ["li"]).length;
@@ -561,11 +574,12 @@ function analyzeContentShape(
     (text.match(/\d+(\.\d+)?\s*(%|％|亿元|万元|亿美元|%|万|亿|kg|ms|px)/g) ?? []).length +
     (text.match(/20\d{2}\s*年/g) ?? []).length;
 
-  const externalCitations = findTags(html, ["a"])
-    .filter((a) => {
-      const rel = a.attrs.rel ?? "";
-      return /nofollow/.test(rel) || /^https?:\/\//i.test(a.attrs.href ?? "");
-    }).length;
+  // 外链引用：收集 href 用于权威来源判定
+  const externalLinks = findTags(html, ["a"]).filter((a) => {
+    const rel = a.attrs.rel ?? "";
+    return /nofollow/.test(rel) || /^https?:\/\//i.test(a.attrs.href ?? "");
+  });
+  const externalCitations = externalLinks.length;
 
   const sentences = text.split(/[。！？.!?]+/).filter((s) => s.trim().length > 0);
   const avgSentenceLength = sentences.length
@@ -599,6 +613,57 @@ function analyzeContentShape(
     }
   }
 
+  // v2.1: FAQ/Q&A 结构 —— FAQPage JSON-LD 或 ≥2 个疑问句 heading + 紧跟答案块
+  const questionHeadings = headings.filter((h) =>
+    /[?？]$|^(什么是|如何|怎么|为什么|怎样|是不是|能否)/i.test(h.text.trim())
+  );
+  const hasFaqStructure =
+    ld?.hasFaqPage === true ||
+    (questionHeadings.length >= 2 && paragraphs >= questionHeadings.length);
+
+  // v2.1: 结构化元素密度 —— (列表项 + 表格*3) / max(段落数, 1)
+  const structuredElementDensity =
+    (li + tables * 3) / Math.max(paragraphs, 1);
+
+  // v2.1: 作者权威链接 —— 作者节点 sameAs 或 article:author + 作者主页 a 同时存在
+  const metaAuthor = allMeta?.author || allMeta?.["article:author"];
+  const hasAuthorHomepageLink = externalLinks.some((a) => {
+    const href = a.attrs.href ?? "";
+    return /author|about|profile|bio|people/i.test(href) || /\/about\//i.test(href);
+  });
+  const hasAuthorAuthority =
+    ld?.hasAuthorSameAs === true ||
+    (!!metaAuthor && hasAuthorHomepageLink);
+
+  // v2.1: 权威来源 —— 外链含 .gov/.edu/.mil 或 ≥2 个不同权威域名
+  const authorityDomains = new Set<string>();
+  for (const a of externalLinks) {
+    const href = a.attrs.href ?? "";
+    const m = href.match(/^https?:\/\/([^/]+)/i);
+    if (!m) continue;
+    const domain = m[1].toLowerCase();
+    if (/(?:^|\.)(gov|edu|mil|gouv|gob|go\.id|ac\.uk)\.?[a-z]*$/i.test(domain) || /\.(gov|edu|mil)$/i.test(domain)) {
+      authorityDomains.add(domain);
+    }
+  }
+  const hasAuthoritativeSources = authorityDomains.size >= 1;
+
+  // v2.1: 更新时间一致性 —— modified >= published 且 modified 距今 ≤365 天
+  const publishedStr =
+    allMeta?.["article:published_time"] || allMeta?.["pubdate"] || allMeta?.["date"];
+  const modifiedStr =
+    allMeta?.["article:modified_time"] || allMeta?.["og:updated_time"];
+  const publishedTime = publishedStr ? Date.parse(publishedStr) : NaN;
+  const modifiedTime = modifiedStr ? Date.parse(modifiedStr) : NaN;
+  let hasDateConsistency = false;
+  if (Number.isFinite(publishedTime) && Number.isFinite(modifiedTime)) {
+    const withinOneYear = Date.now() - modifiedTime <= 365 * 24 * 60 * 60 * 1000;
+    hasDateConsistency = modifiedTime >= publishedTime && withinOneYear && modifiedTime <= Date.now();
+  } else if (ld?.hasDateModified && Number.isFinite(modifiedTime)) {
+    // 只有 modified 时：仅校验时效性
+    hasDateConsistency = Date.now() - modifiedTime <= 365 * 24 * 60 * 60 * 1000 && modifiedTime <= Date.now();
+  }
+
   return {
     paragraphs,
     lists: ul,
@@ -613,6 +678,11 @@ function analyzeContentShape(
     hasDirectAnswer,
     hasSemanticLandmarks,
     headingContinuity,
+    hasFaqStructure,
+    structuredElementDensity,
+    hasAuthorAuthority,
+    hasAuthoritativeSources,
+    hasDateConsistency,
   };
 }
 
@@ -623,26 +693,35 @@ function extractJsonLdInfo(html: string): JsonLdInfo {
   let hasDatePublished = false;
   let hasDateModified = false;
   let hasSameAs = false;
+  let hasFaqPage = false;
+  let hasAuthorSameAs = false;
 
   for (const sc of findTags(html, ["script"])) {
     if (!/ld\+json/i.test(sc.attrs.type ?? "")) continue;
     const raw = html.slice(sc.contentStart, sc.contentEnd).trim();
     if (!raw) continue;
 
-    const walk = (node: unknown, depth = 0) => {
+    // inAuthor 跟踪当前节点是否处于 author/creator 上下文 ——
+    // 只把作者节点的 sameAs 计入 hasAuthorSameAs（区别于组织级 sameAs）。
+    const walk = (node: unknown, depth = 0, inAuthor = false) => {
       if (depth > 8 || !node) return;
       if (Array.isArray(node)) {
-        node.forEach((n) => walk(n, depth + 1));
+        node.forEach((n) => walk(n, depth + 1, inAuthor));
         return;
       }
       if (typeof node !== "object") return;
       const o = node as Record<string, unknown>;
 
       const t = o["@type"];
-      if (typeof t === "string") types.add(t);
-      else if (Array.isArray(t)) {
+      if (typeof t === "string") {
+        types.add(t);
+        if (t === "FAQPage") hasFaqPage = true;
+      } else if (Array.isArray(t)) {
         (t as unknown[]).forEach((x) => {
-          if (typeof x === "string") types.add(x);
+          if (typeof x === "string") {
+            types.add(x);
+            if (x === "FAQPage") hasFaqPage = true;
+          }
         });
       }
 
@@ -650,10 +729,16 @@ function extractJsonLdInfo(html: string): JsonLdInfo {
       if (o.publisher !== undefined) hasOrganization = true;
       if (o.datePublished !== undefined) hasDatePublished = true;
       if (o.dateModified !== undefined) hasDateModified = true;
-      if (o.sameAs !== undefined || o.identifier !== undefined) hasSameAs = true;
+      if (o.sameAs !== undefined || o.identifier !== undefined) {
+        hasSameAs = true;
+        if (inAuthor) hasAuthorSameAs = true;
+      }
 
       for (const key of ["@graph", "author", "creator", "publisher", "mainEntity", "itemListElement"]) {
-        if (o[key] !== undefined) walk(o[key], depth + 1);
+        if (o[key] !== undefined) {
+          const childInAuthor = inAuthor || key === "author" || key === "creator";
+          walk(o[key], depth + 1, childInAuthor);
+        }
       }
     };
 
@@ -671,6 +756,8 @@ function extractJsonLdInfo(html: string): JsonLdInfo {
     hasDatePublished,
     hasDateModified,
     hasSameAs,
+    hasFaqPage,
+    hasAuthorSameAs,
   };
 }
 

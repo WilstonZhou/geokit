@@ -183,6 +183,8 @@ export function computeGeoV1(input: GeoInput): GeoResult {
 
   return {
     version: "1.0.0",
+    // v1 为冻结基线，scoringVersion 固定 "1.0.0" —— 不接受新信号，保证历史回归不破
+    scoringVersion: "1.0.0",
     total,
     breakdown,
     recommendations,

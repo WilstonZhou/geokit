@@ -170,4 +170,52 @@ describe("Diff Engine (Unit Tests)", () => {
       assert.strictEqual(changes[0].current, true);
     });
   });
+
+  describe("6 scoringVersion 软提示（T9）", () => {
+    const geoObs = (overrides: Partial<Observation> = {}): Observation =>
+      sampleObs({
+        type: "geo_score",
+        subject: "site:https://example.com",
+        source: "audit",
+        observerVersion: "site-observer@0.1.0",
+        parserVersion: "audit-checks@1.0.0",
+        status: "OBSERVED",
+        result: { geoScore: 70, geoVersion: "2.0.0", scoringVersion: "2.0.0" },
+        ...overrides,
+      });
+
+    it("scoringVersion 不同时保持 comparable 并附加 VERSION caveat", () => {
+      const prev = geoObs({ result: { geoScore: 70, geoVersion: "2.0.0", scoringVersion: "2.0.0" } });
+      const cur = geoObs({ result: { geoScore: 75, geoVersion: "2.0.0", scoringVersion: "2.1.0" } });
+      const diff = diffObservations(prev, cur);
+      assert.strictEqual(diff.comparable, true);
+      const sv = diff.changes.find((c) => c.path === "result.scoringVersion");
+      assert.ok(sv, "应产生 scoringVersion 的 VERSION 变更");
+      assert.strictEqual(sv.kind, "VERSION");
+      assert.strictEqual(sv.direction, "unknown");
+      assert.match(sv.note!, /评分规则版本变化/);
+      assert.strictEqual(sv.previous, "2.0.0");
+      assert.strictEqual(sv.current, "2.1.0");
+    });
+
+    it("历史观测缺 scoringVersion 时按 geoVersion 推断初版规则", () => {
+      // T9 之前落库的记录无 scoringVersion 字段，仅有 geoVersion
+      const prev = geoObs({ result: { geoScore: 70, geoVersion: "2.0.0" } });
+      const cur = geoObs({ result: { geoScore: 75, geoVersion: "2.0.0", scoringVersion: "2.1.0" } });
+      const diff = diffObservations(prev, cur);
+      assert.strictEqual(diff.comparable, true);
+      const sv = diff.changes.find((c) => c.path === "result.scoringVersion");
+      assert.ok(sv);
+      assert.strictEqual(sv.previous, "2.0.0"); // 推断值
+      assert.strictEqual(sv.current, "2.1.0");
+    });
+
+    it("scoringVersion 相同时不产生 VERSION 变更", () => {
+      const prev = geoObs({ result: { geoScore: 70, geoVersion: "2.0.0", scoringVersion: "2.1.0" } });
+      const cur = geoObs({ result: { geoScore: 75, geoVersion: "2.0.0", scoringVersion: "2.1.0" } });
+      const diff = diffObservations(prev, cur);
+      const sv = diff.changes.find((c) => c.path === "result.scoringVersion");
+      assert.strictEqual(sv, undefined);
+    });
+  });
 });
