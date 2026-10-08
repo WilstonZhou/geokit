@@ -382,6 +382,43 @@ recommendations 聚合、evidence 聚合（去重）、verification 取主机会
 - MCP 工具：`list_opportunities`、`verify_opportunity`；
 - 页面：`/opportunities`（粘贴 OpportunityInput JSON 即可生成）。
 
+## Query Intelligence（轻量）
+
+目标不是搜索量/KD，而是把一个 query 的已有观测汇总：
+Query → SERP → 搜索意图 → 实体/问题 → 竞品 → AI 答案 → 引用来源 → 内容缺口。
+
+**核心类型**（`src/lib/query/types.ts`）：
+- `IntentClassification`：5 类意图 + 置信度 + basis（触发依据，可追溯）
+- `RelatedQuestion`：从 SERP 标题 / AI 答案提取的相关问题，标 sources（不编造）
+- `CompetitorAppearance`：SERP + AI 引用域名聚合，含出现次数与位置
+- `ContentGap`：竞品普遍覆盖、用户未覆盖的话题
+- `QueryCluster`：基于共享 SERP URL 重合度的聚类
+- `QueryAnalysis`：单 query 完整分析结果 + sourceAvailability（标 unavailable）
+
+**六项能力**：
+
+| 能力 | 触发条件 | 实现位置 |
+|---|---|---|
+| 意图分类 | query 文本特征 + SERP 结构特征 | `intent.ts` classifyIntent |
+| 相关问题 | SERP 标题 / AI 答案含问句 | `questions.ts` extractRelatedQuestions |
+| 竞品识别 | SERP / AI 引用里反复出现的域名 | `competitors.ts` identifyCompetitors |
+| 内容缺口 | 对照 T3 用户爬取，竞品普遍覆盖话题 | `contentGap.ts` findContentGaps |
+| Query 聚类 | 共享 SERP URL 重合度 ≥ 阈值 | `cluster.ts` clusterQueries |
+| 单 query 编排 | 上述全部，缺哪段跳过 | `analyze.ts` analyzeQuery |
+
+**意图优先级**（`INTENT_PRIORITY` 常量透明）：
+`navigational(0) > transactional(1) > local(2) > comparative(3) > informational(4)`。
+多规则命中取优先级最高的；置信度按命中规则数 high/medium/low。
+
+**铁律**：
+- 不调用任何大模型 —— 全部规则驱动；
+- 不编造相关问题 —— 只能从实际观测到的文本提取；
+- 缺数据源对应段落标 `unavailable`，绝不报错；
+- 聚类与意图分类有确定性测试（固定输入固定输出）。
+
+- MCP 工具：`analyze_query`、`cluster_queries`；
+- 页面：`/queries`（单 query 分析 / 多 query 聚类双模式）。
+
 ## 命令行与 CI 门禁（CLI）
 
 GEOkit 提供独立于 Web 服务的轻量级 CLI 工具（冷启动、确定性退出码、支持 GitHub Code Scanning SARIF 格式）：

@@ -36,6 +36,13 @@ import {
   type OpportunityInput,
   type OpportunityResolution,
 } from "./opportunity";
+import {
+  analyzeQuery,
+  clusterQueries,
+  type QueryAnalysisInput,
+  type QueryClusterInput,
+  type ClusterOptions,
+} from "./query";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
@@ -427,6 +434,64 @@ export const TOOLS: ToolDef[] = [
         },
       },
       required: ["opportunity", "prevObservations", "currObservations"],
+    },
+  },
+  {
+    name: "analyze_query",
+    title: "Query Intelligence：单 query 完整分析",
+    description:
+      "对单个 query 汇总已有观测：意图分类（5 类，规则驱动）、相关问题（从 SERP 标题与 AI 答案提取，不编造）、" +
+      "竞品识别（SERP 与 AI 引用域名去重）、内容缺口（对照 T3 用户站点爬取）、GSC 表现（可选）。" +
+      "缺数据源时对应段落标 unavailable，不报错。不调用任何大模型，结论全部来自规则。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "查询文本" },
+        serpResults: {
+          type: "array",
+          description: "多引擎 SERP 响应（fetchSerp 返回的 SerpResponse[]）",
+        },
+        aiCitations: {
+          type: "array",
+          description: "T2 AI 引用记录（CitationRecord[]）",
+        },
+        gscOpportunities: {
+          type: "array",
+          description: "T5 GSC 机会（可选）",
+        },
+        userCrawl: {
+          type: "object",
+          description: "T3 用户站点爬取结果，内容缺口分析用",
+        },
+        userDomain: { type: "string", description: "用户域名，用于排除自家结果" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "cluster_queries",
+    title: "Query Intelligence：基于共享 SERP URL 重合度聚类",
+    description:
+      "对一批 query，按 SERP 结果 URL 重合度聚类。两个 query 的 URL 集合 Jaccard ≥ 阈值（默认 0.3）" +
+      "或共享 URL 数 ≥ minSharedUrls（默认 2）时归为同簇。纯函数 + 确定性算法，固定输入固定输出。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        queries: {
+          type: "array",
+          description: "待聚类的 query 列表，每项含 query 与 serpResults",
+          items: {
+            type: "object",
+            properties: {
+              query: { type: "string" },
+              serpResults: { type: "array" },
+            },
+          },
+        },
+        jaccardThreshold: { type: "number", description: "Jaccard 阈值，默认 0.3" },
+        minSharedUrls: { type: "number", description: "共享 URL 数下限，默认 2" },
+      },
+      required: ["queries"],
     },
   },
 ];
@@ -950,6 +1015,60 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
           resolution === "unknown"
             ? "未找到可比的前后观测，无法判定。"
             : `复检结论：${resolution}`,
+      };
+    }
+
+    case "analyze_query": {
+      if (typeof args.query !== "string" || !args.query.trim()) {
+        throw new Error("analyze_query 需要 query 字符串");
+      }
+      const input: QueryAnalysisInput = { query: String(args.query).trim() };
+      if (Array.isArray(args.serpResults)) {
+        input.serpResults = args.serpResults as QueryAnalysisInput["serpResults"];
+      }
+      if (Array.isArray(args.aiCitations)) {
+        input.aiCitations = args.aiCitations as QueryAnalysisInput["aiCitations"];
+      }
+      if (Array.isArray(args.gscOpportunities)) {
+        input.gscOpportunities = args.gscOpportunities as QueryAnalysisInput["gscOpportunities"];
+      }
+      if (args.userCrawl && typeof args.userCrawl === "object") {
+        input.userCrawl = args.userCrawl as QueryAnalysisInput["userCrawl"];
+      }
+      if (typeof args.userDomain === "string" && args.userDomain.trim()) {
+        input.userDomain = String(args.userDomain).trim();
+      }
+      return analyzeQuery(input);
+    }
+
+    case "cluster_queries": {
+      if (!Array.isArray(args.queries)) {
+        throw new Error("cluster_queries 需要 queries 数组");
+      }
+      const queries: QueryClusterInput[] = args.queries
+        .filter((q: unknown): q is QueryClusterInput =>
+          !!q && typeof q === "object" && typeof (q as QueryClusterInput).query === "string"
+        )
+        .map((q: QueryClusterInput) => ({
+          query: String(q.query),
+          serpResults: Array.isArray(q.serpResults) ? q.serpResults : [],
+        }));
+      const options: ClusterOptions = {};
+      if (typeof args.jaccardThreshold === "number") {
+        options.jaccardThreshold = Number(args.jaccardThreshold);
+      }
+      if (typeof args.minSharedUrls === "number") {
+        options.minSharedUrls = Number(args.minSharedUrls);
+      }
+      const clusters = clusterQueries(queries, options);
+      return {
+        total: clusters.length,
+        queriesAnalyzed: queries.length,
+        clusters,
+        note:
+          clusters.length === 0
+            ? "无符合条件的簇（共享 URL 不足或 Jaccard < 阈值）。"
+            : `共 ${clusters.length} 个簇，最大簇含 ${Math.max(...clusters.map((c) => c.queries.length))} 个 query。`,
       };
     }
 

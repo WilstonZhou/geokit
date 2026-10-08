@@ -13,6 +13,37 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
+## [Phase 2 T7] — 2026-10-08 · Query Intelligence（轻量）
+
+> 把一个 query 的已有观测汇总：意图 → 问题 → 竞品 → AI 引用 → 内容缺口 → 聚类。
+
+### 核心变更
+
+1. **新增 `src/lib/query/` 模块**：
+   - `types.ts`：`QueryIntent`（5 类）/ `IntentClassification` / `RelatedQuestion` / `CompetitorAppearance` / `ContentGap` / `QueryCluster` / `QueryAnalysisInput` / `QueryAnalysis`（含 `sourceAvailability`）/ `QueryClusterInput` / `ClusterOptions`。
+   - `intent.ts`：`classifyIntent(query, serpResults?)` —— 5 类意图规则驱动，`INTENT_PRIORITY` 透明常量；多规则命中取优先级最高，置信度按命中数 high/medium/low。query 文本规则 + SERP 结构特征（自家产品 / 电商域名 / 本地服务域名 / 标题问句）双重信号。
+   - `questions.ts`：`extractRelatedQuestions(serpResults?, aiCitations?)` —— 从 SERP 标题与 AI 答案切句提取问句，同问句合并多来源。**不编造** —— 无可提取文本返回空数组。
+   - `competitors.ts`：`identifyCompetitors(serpResults?, aiCitations?, userDomain?)` —— SERP + AI 引用域名聚合，同 SERP/记录内同域名去重；用户域名排除；`source` 标 serp/ai/both。
+   - `contentGap.ts`：`findContentGaps(serpResults?, competitors?, userCrawl?)` —— 从竞品 SERP 标题提取话题关键词，对照 T3 用户爬取页面标题判断覆盖情况；至少 2 个竞品覆盖且用户未覆盖才输出。
+   - `cluster.ts`：`clusterQueries(inputs, options?)` —— 基于共享 SERP URL 重合度的并查集聚类；默认 Jaccard 阈值 0.3 / minSharedUrls 2；`overlapScore` 为簇内配对平均 Jaccard。纯函数 + 确定性算法。
+   - `analyze.ts`：`analyzeQuery(input)` —— 单 query 完整编排；缺哪段对应段落标 `unavailable`。
+   - `index.ts`：编排入口与全部导出。
+2. **MCP（18→20）**：`analyze_query`（接受 `QueryAnalysisInput` 全可选字段，缺哪段跳过哪段，不报错）、`cluster_queries`（接受 `queries[]` + 可选阈值，返回 total/queriesAnalyzed/clusters）。`tests/integration/mcp.test.ts` 工具数断言 18→20。
+3. **页面/API**：新增 `/api/queries`（POST，支持 `action=analyze` / `action=cluster` 双模式，30s 超时）与 `/queries` 页面（双模式切换、汇总 + 意图 + 相关问题 + 竞品 + 内容缺口 + 聚类结果）；首页加"Query Intelligence"导航卡片（CAPABILITIES 6→7 项，"六项"→"七项"）。
+4. **测试**：`tests/unit/query.test.ts`（30 项）覆盖 5 类意图触发 + 默认 + SERP 强化、相关问题提取/合并/不编造/降级、竞品识别 SERP+AI+both+用户排除、内容缺口命中/不命中/降级、聚类命中/不命中/阈值参数/确定性、analyzeQuery 全缺失降级/全字段齐全/确定性、INTENT_PRIORITY 透明。
+
+### 验证
+
+- `npm run typecheck` 通过；`npm test` 全量通过（+32，共 335）；`npm run build` 成功（新增 `/queries`、`/api/queries`）。
+
+### 已知限制 / 待办（建议）
+
+- 内容缺口的话题提取基于关键词切分（2–12 字 token），未做语义相似度；中文长尾话题可能漏判。
+- 意图分类规则关键词为固定列表，未做 query 改写或同义词扩展。
+- 聚类用并查集，未做层次聚类或 k-means；簇内最大 query 数受阈值控制。
+
+---
+
 ## [Phase 2 T6] — 2026-10-08 · Opportunity Engine（机会引擎）
 
 > 把"发现了一个个独立问题"升级为"告诉用户下一步做什么"。依赖 T2 / T4，可选依赖 T5。

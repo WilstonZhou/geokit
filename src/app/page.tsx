@@ -72,6 +72,13 @@ const CAPABILITIES = [
     href: "/opportunities",
     highlight: "规则模板，不调 LLM",
   },
+  {
+    icon: "?",
+    title: "Query Intelligence",
+    desc: "对一个 query 汇总已有观测：意图分类（5 类规则驱动）、相关问题（不编造）、竞品识别、内容缺口（对照 T3）、基于共享 SERP URL 的聚类。",
+    href: "/queries",
+    highlight: "规则驱动，缺数据标 unavailable",
+  },
 ];
 
 export default function Home() {
@@ -116,10 +123,10 @@ export default function Home() {
         </div>
       </section>
 
-      {/* 四个能力 */}
+      {/* 核心能力 */}
       <section>
         <SectionTitle
-          title="六项核心能力"
+          title="七项核心能力"
           desc="每一项都针对实测出的 open-seo 空白区，而不是为了差异化而差异化。"
         />
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
