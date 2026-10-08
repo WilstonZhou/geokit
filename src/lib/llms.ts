@@ -100,12 +100,13 @@ export interface RobotsAnalysis {
   recommendations: string[];
 }
 
-interface ParsedRobots {
+export interface ParsedRobots {
   groups: { agents: string[]; rules: { path: string; allow: boolean }[] }[];
   sitemaps: string[];
 }
 
-function parseRobots(txt: string): ParsedRobots {
+/** T3：导出供 crawler 复用 —— 同一套 robots 规则解析，不另起一套 */
+export function parseRobots(txt: string): ParsedRobots {
   const lines = txt.split(/\r?\n/);
   const groups: ParsedRobots["groups"] = [];
   const sitemaps: string[] = [];

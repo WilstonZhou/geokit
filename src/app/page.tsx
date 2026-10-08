@@ -51,6 +51,13 @@ const CAPABILITIES = [
     href: "/llms",
     highlight: "从想法到可用实现",
   },
+  {
+    icon: "⌗",
+    title: "站点爬取与站点图",
+    desc: "BFS 同域页面，每页产出审计摘要与站内出链，构建站点图并标注孤岛页。受 maxPages / maxDepth / 总耗时上限约束，截断如实返回。",
+    href: "/crawl",
+    highlight: "站点级结构洞察",
+  },
 ];
 
 export default function Home() {
@@ -98,7 +105,7 @@ export default function Home() {
       {/* 四个能力 */}
       <section>
         <SectionTitle
-          title="四项核心能力"
+          title="五项核心能力"
           desc="每一项都针对实测出的 open-seo 空白区，而不是为了差异化而差异化。"
         />
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

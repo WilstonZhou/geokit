@@ -11,6 +11,7 @@
 import { auditUrl } from "./audit";
 import { CN_ENGINES, GLOBAL_ENGINES, ENGINE_LIST, type EngineId } from "./engines";
 import { analyzeRobots, analyzeLlmsTxt, generateLlmsTxtDraft } from "./llms";
+import { crawlSite } from "./crawler";
 /**
  * Phase 0：工具实现不再直接调用采集层，一律走 services/*。
  *
@@ -134,7 +135,7 @@ export const TOOLS: ToolDef[] = [
       }
     },
     {
-      name: "check_ai_visibility",
+    name: "check_ai_visibility",
     title: "中文 AI 可见性探测",
     description:
       "向 DeepSeek、豆包、Kimi、通义、文心、元宝、ChatGPT、Claude、Gemini 提问，检测指定品牌是否被提及。" +
@@ -153,6 +154,24 @@ export const TOOLS: ToolDef[] = [
         },
       },
       required: ["brand", "topic"],
+    },
+  },
+  {
+    name: "crawl_site",
+    title: "站点爬取与站点图",
+    description:
+      "BFS 爬取指定站点的同域页面：每页产出审计摘要（title / h1 / canonical / geoScore / noindex 等）与站内出链，" +
+      "构建站点图后标注孤岛页。受 maxPages / maxDepth / 总耗时上限限制时返回已爬到的部分结果并标 truncated=true。" +
+      "403 页面如实记录为 blocked，4xx/5xx 当数据保留不丢弃。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        site: { type: "string", description: "站点 URL 或域名，如 https://example.com 或 example.com" },
+        maxPages: { type: "number", description: "最大页面数（默认 100）" },
+        maxDepth: { type: "number", description: "最大点击深度（默认 3，起点为 0）" },
+        concurrency: { type: "number", description: "并发数（默认 2，建议保守值避免压目标站点）" },
+      },
+      required: ["site"],
     },
   },
   {
@@ -481,6 +500,34 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
               }
             : null,
         })),
+      };
+    }
+
+    case "crawl_site": {
+      const site = String(args.site ?? "").trim();
+      if (!site) throw new Error("缺少 site");
+      const config: { maxPages?: number; maxDepth?: number; concurrency?: number } = {};
+      if (args.maxPages !== undefined) config.maxPages = Number(args.maxPages);
+      if (args.maxDepth !== undefined) config.maxDepth = Number(args.maxDepth);
+      if (args.concurrency !== undefined) config.concurrency = Number(args.concurrency);
+      const result = await crawlSite(site, { config });
+      return {
+        origin: result.origin,
+        pages: result.pages.map((p) => ({
+          url: p.url,
+          httpStatus: p.httpStatus,
+          title: p.title,
+          geoScore: p.geoScore,
+          clickDepth: p.clickDepth,
+          blocked: p.blocked,
+        })),
+        truncated: result.truncated,
+        reason: result.reason,
+        pageCount: result.pages.length,
+        graph: {
+          nodes: result.graph.nodes.length,
+          edges: result.graph.edges.length,
+        },
       };
     }
 

@@ -25,7 +25,8 @@ export type FetchPurpose =
   | "robots"
   | "llms"
   | "ai-visibility"
-  | "resolve-redirect";
+  | "resolve-redirect"
+  | "crawl";
 
 export type FetchErrorKind =
   | "timeout"

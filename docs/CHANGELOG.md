@@ -13,6 +13,35 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
+## [Phase 2 T3] — 2026-10-08 · 有上限的站点爬虫
+
+> GEOkit 从单页审计升级为站点级审计的基础。有礼貌、有上限、可中断，零新增依赖。
+
+### 核心变更
+
+1. **爬虫核心**（`src/lib/crawler/`）：7 个模块拆分 —— `types`（接口+默认配置）、`normalize`（URL 规范化：去 fragment + 参数排序 + 尾斜杠 + 静态资源过滤）、`robots`（Disallowed 路径不爬 + Crawl-delay 遵守 + 任意路径 longest-match）、`sitemap`（零依赖正则解析 urlset/sitemapindex + 递归深度上限 3）、`graph`（站点图：节点+边+入链数+点击深度+孤岛标记）、`diff`（两次爬取 diff：新增/消失/状态变化）、`index`（`crawlSite` 编排器）。
+2. **复用不另起一套**：`parseRobots` 从 `llms.ts` 导出（原内部函数）；每页解析复用 `audit.ts` 的 `analyze()` 纯函数（不调 `auditUrl` 避免重复 fetch + evidence 侧链）。
+3. **礼貌爬取**：host-keyed 上次请求时间戳 map；delay = max(robots Crawl-delay × 1000, minRequestIntervalMs 默认 500ms)；并发上限 worker pool（同 `batchProbeVisibility` 模式）。
+4. **可中断**：达到 maxPages / maxDepth / totalBudgetMs 任一上限时返回已爬结果 + `truncated: true` + 原因。
+5. **不绕过反爬**：403/验证码 → `blocked: { reason }` 如实记录；4xx/5xx → 最小页面记录（不丢弃）；跳转链从 `finalUrl` 重建。
+6. **Observation(kind="crawl") 落库**：`subject = siteSubject(origin)`，`source = httpSource(startUrl)`，落库前 `assertValidObservation` 校验，受 `GEOKIT_EVIDENCE` 总闸控制。
+7. **可注入 fetcher**：`crawlSite(input, { fetcher? })` 默认 `fetchWithPolicy`，集成测试用内存假站点（`Record<string,string>` + 假 fetcher），不访问真实外网。
+8. **API + MCP + 页面**：`POST /api/crawl`、MCP 工具 `crawl_site`（工具数 13→14）、`/crawl` 页面（列表 + 按状态码/孤岛筛选 + 统计卡）。
+9. **FetchPurpose** 加 `"crawl"`（1 行 additive）。
+
+### 验证
+
+- `npm test`：196 项全量通过（+70 新断言）；`npm run typecheck`：0 error；`npm run lint`：0 error（8 既有 warning）；`npm run build`：成功，`/crawl` 与 `/api/crawl` 路由已注册。
+
+### 已知限制
+
+- 正则解析 sitemap 对畸形 XML 脆弱；递归深度上限 3 防失控。后续可换 `findTags` 风格解析。
+- 复用 `analyze()` 不走 `auditUrl` 的 evidence 侧链：单页 `page_html` Evidence 不另存（v1 取舍，站点爬取是结论而非逐页证据链）。
+- 单进程限速（host-keyed 时间戳 map）—— 多实例部署不适用；本地/CLI 工具足够。
+- 无 JS 渲染（禁止无头浏览器）—— JS 渲染内容不爬取，README + UI 明示。
+
+---
+
 ## [Phase 2 T2 补齐] — 2026-10-08 · 竞品链路全程透传 + 并发/超时可配置 + 五态测试补全
 
 > 对照 T2 任务书逐条复核后发现的三个真实缺口，本轮补齐。

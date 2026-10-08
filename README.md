@@ -242,6 +242,47 @@ MCP 查询入口：`list_observations` 按 kind / subject / 时间过滤历史�
 - MCP 工具 `analyze_ai_citations` 输出引用来源排行、竞品出现频次、引用缺口
   （被多个模型引用、但你的域名没出现的来源域名），每条结论附 evidence。
 
+## 站点爬虫（Site Crawler）
+
+GEOkit 从单页审计升级为站点级审计的基础。一个有礼貌、有上限、可中断的爬虫，
+产出站点图与每页 GEO 评分，作为 `Observation(kind="crawl")` 存档，支持两次爬取的 diff。
+
+### 礼貌爬取声明
+
+- **遵守 robots.txt**：Disallowed 路径不爬；识别并遵守 Crawl-delay；
+- **保守默认**：并发 ≤ 2、同 host 最小间隔 500ms、最大页面 100、最大深度 3、总耗时 2 分钟；
+- **不绕过反爬**：403/验证码按 `blocked` 状态如实记录原因，不尝试绕过；
+- **无头浏览器**：不使用 Puppeteer/Playwright，不执行 JS 渲染内容；
+- **可中断**：达到任一上限时返回已爬结果并标明 `truncated: true` + 原因。
+
+### 爬取策略
+
+1. 起点：给定域名/URL；优先读取 robots.txt 与 sitemap（含 sitemap index 递归解析），
+   再从页面 `<a href>` 链接补充发现；
+2. 仅限同域（可配置 `includeSubdomains` 包含子域）；
+3. URL 规范化与去重：去 fragment、参数排序、尾斜杠策略、忽略静态资源（`.css/.js/.png` 等）；
+4. 跳转链、4xx/5xx、超时都作为数据记录下来，不丢弃；
+5. 每个页面产出：URL、状态码、跳转链、title、meta description、H1、canonical、noindex、
+   hreflang、JSON-LD 类型、内链/外链数、字数、GEO 六维评分（复用 `audit.ts` 的 `analyze` 纯函数）；
+6. 站点图：URL 节点 + 内链边 + 入链数 + 点击深度 + 孤岛页标记（sitemap 有但无内链指向）。
+
+### 使用方式
+
+```bash
+# API
+curl -X POST http://localhost:3000/api/crawl \
+  -H "Content-Type: application/json" \
+  -d '{"site":"example.com","config":{"maxPages":50,"maxDepth":2}}'
+
+# MCP 工具
+crawl_site(site: "example.com", maxPages?: 100, maxDepth?: 3, concurrency?: 2)
+
+# Web 界面：访问 /crawl
+```
+
+两次爬取的 diff（新增/消失/状态变化的页面）通过 `diffCrawlResults` 纯函数计算，
+匹配键为 URL，输出 `CrawlDiff { added[], removed[], statusChanged[], unchangedCount }`。
+
 ## 命令行与 CI 门禁（CLI）
 
 GEOkit 提供独立于 Web 服务的轻量级 CLI 工具（冷启动、确定性退出码、支持 GitHub Code Scanning SARIF 格式）：
