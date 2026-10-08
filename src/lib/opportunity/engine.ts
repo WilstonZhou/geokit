@@ -2,7 +2,7 @@
  * 鲸析 GEOkit — Opportunity Engine（T6）
  *
  * 引擎只做三件事：
- *   1. 调六个生成器，把"发现"翻译成"下一步动作"；
+ *   1. 调七个生成器，把"发现"翻译成"下一步动作"；
  *   2. 按 impact×effort 排序，同分按受影响范围排序；
  *   3. 同 target 上多条机会合并为一条多建议机会。
  *
@@ -25,6 +25,7 @@ import {
   genSiteIssueHigh,
   genSearchOpportunity,
   genMissingEntity,
+  genSchemaIssue,
   makeOpportunityId,
 } from "./generators";
 
@@ -172,6 +173,7 @@ export function generateOpportunities(input: OpportunityInput): Opportunity[] {
     ...genSiteIssueHigh(input.siteAnalysis),
     ...genSearchOpportunity(input.gscOpportunities),
     ...genMissingEntity(input.pageAudits),
+    ...genSchemaIssue(input.schemaDiagnoses),
   ];
 
   // 铁律：没有 evidence 的机会不输出（生成器本应保证，此处兜底）
@@ -191,6 +193,7 @@ export function countByType(list: Opportunity[]): Record<OpportunityType, number
     "site-issue-high": 0,
     "search-opportunity": 0,
     "missing-entity": 0,
+    "schema-issue": 0,
   };
   for (const o of list) counts[o.type]++;
   return counts;

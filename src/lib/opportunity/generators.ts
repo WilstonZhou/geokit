@@ -1,5 +1,5 @@
 /**
- * 鲸析 GEOkit — Opportunity Engine 六个生成器（T6）
+ * 鲸析 GEOkit — Opportunity Engine 七个生成器（T6，T10 新增 schema-issue）
  *
  * 每个生成器是纯函数：接受一段输入片段，返回 Opportunity[]。
  *
@@ -24,6 +24,7 @@ import type { CitationAggregation } from "../visibility/aggregate";
 import type { RobotsAnalysis, LlmsTxtAnalysis } from "../llms";
 import type { GscOpportunity } from "../gsc/types";
 import type { PageAudit } from "../audit";
+import type { SchemaDiagnosis } from "../schema/types";
 import { getDomain } from "../html";
 
 /* ------------------------------------------------------------------ */
@@ -497,5 +498,129 @@ export function genMissingEntity(
       affectedScope: missing.length,
     });
   }
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* 7. schema-issue —— T10 Schema 缺失/不完整/内容不一致                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 触发条件：T10 Schema 诊断中存在
+ *   - 必填字段缺失（high），或
+ *   - 推荐字段缺失/不完整、JSON-LD 与可见内容矛盾、实体标注不全（medium）。
+ * 只诊断不自动改；建议引导用户复制 generate_schema_draft 草稿。
+ */
+export function genSchemaIssue(
+  diagnoses: SchemaDiagnosis[] | undefined
+): Opportunity[] {
+  if (!diagnoses || diagnoses.length === 0) return [];
+  const out: Opportunity[] = [];
+
+  for (const d of diagnoses) {
+    const requiredMissing = d.fieldChecks.filter(
+      (f) => f.level === "required" && (f.status === "missing" || f.status === "empty")
+    );
+    const recommendedGap = d.fieldChecks.filter(
+      (f) =>
+        f.level === "recommended" &&
+        (f.status === "missing" || f.status === "empty" || f.status === "incomplete")
+    );
+    const entityMissing = [
+      d.entityClarity.author,
+      d.entityClarity.organization,
+      d.entityClarity.sameAs,
+      d.entityClarity.contact,
+      d.entityClarity.datePublished,
+      d.entityClarity.dateModified,
+    ].filter((s) => !s.present).length;
+
+    // 无任何问题 → 不输出（没证据不输出）
+    if (
+      requiredMissing.length === 0 &&
+      recommendedGap.length === 0 &&
+      d.consistencyIssues.length === 0 &&
+      entityMissing === 0
+    ) {
+      continue;
+    }
+
+    const target = d.url;
+    const impact: ImpactLevel = requiredMissing.length > 0 ? "high" : "medium";
+
+    const evidence: OpportunityEvidenceRef[] = [];
+    for (const f of requiredMissing) {
+      evidence.push({ signal: `schema.${d.detection.type}.required.${f.path}`, value: "missing" });
+    }
+    for (const f of recommendedGap.slice(0, 6)) {
+      evidence.push({ signal: `schema.${d.detection.type}.recommended.${f.path}`, value: f.status });
+    }
+    for (const c of d.consistencyIssues) {
+      evidence.push({
+        signal: `schema.consistency.${c.kind}`,
+        value: `${c.jsonLdValue ?? "-"} ≠ ${c.pageValue ?? "-"}`,
+      });
+    }
+    if (entityMissing > 0) {
+      evidence.push({ signal: "schema.entity.missingCount", value: entityMissing });
+    }
+    evidence.push({
+      signal: "schema.detectedType",
+      value: `${d.detection.type}(${d.detection.confidence})`,
+    });
+
+    const recommendations: Recommendation[] = [];
+    if (requiredMissing.length > 0) {
+      recommendations.push({
+        action: `补全 ${d.detection.type} 页面的必填 Schema 字段：${requiredMissing
+          .map((f) => f.path)
+          .join("、")}`,
+      });
+    }
+    if (recommendedGap.length > 0) {
+      recommendations.push({
+        action: `补全推荐字段：${recommendedGap.map((f) => f.path).join("、")}`,
+        detail: "推荐字段直接影响 AI 对实体与内容结构的理解",
+      });
+    }
+    for (const c of d.consistencyIssues) {
+      recommendations.push({
+        action:
+          c.severity === "mismatch"
+            ? `修正 ${c.kind}：JSON-LD 与页面内容互相矛盾`
+            : `人工复核 ${c.kind}`,
+        detail: c.detail,
+      });
+    }
+    recommendations.push({
+      action: "调用 MCP 工具 generate_schema_draft 获取可复制的 JSON-LD 草稿",
+      detail: "草稿只含页面真实信息，拿不到的字段会标注需人工补充，需自行核对后发布",
+    });
+
+    out.push({
+      id: makeOpportunityId("schema-issue", target),
+      type: "schema-issue",
+      target,
+      impact,
+      effort: "low",
+      diagnosis: {
+        summary:
+          requiredMissing.length > 0
+            ? `该页 Schema 缺 ${requiredMissing.length} 个必填字段、${recommendedGap.length} 个推荐字段`
+            : `该页 Schema 有 ${recommendedGap.length + d.consistencyIssues.length} 处可改进项`,
+        evidence,
+      },
+      recommendations,
+      sources: [],
+      verification: {
+        signalKey: "schemaMissingRequiredCount",
+        direction: "decrease",
+        description: `下次复检时该 URL 的 Schema 必填缺失数应降为 0（当前 ${requiredMissing.length}）`,
+      },
+      affectedScope:
+        requiredMissing.length + recommendedGap.length + d.consistencyIssues.length,
+    });
+  }
+
   return out;
 }

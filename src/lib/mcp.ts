@@ -47,6 +47,11 @@ import {
   analyzeCompetitors,
   type CompetitorInput,
 } from "./competitor";
+import {
+  analyzeSchema,
+  analyzeSchemaUrl,
+  buildSchemaDraft,
+} from "./schema";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
@@ -533,6 +538,36 @@ export const TOOLS: ToolDef[] = [
         competitorCrawls: { type: "array", description: "竞品站点爬取结果（可选）" },
       },
       required: ["userDomain", "competitors"],
+    },
+  },
+  {
+    name: "analyze_schema",
+    title: "Schema 与实体诊断",
+    description:
+      "规则驱动检测页面类型（文章/产品/FAQ/HowTo/本地商家/组织/官网）并给出判定依据；按 Schema.org 检查必填/推荐字段的缺失与不完整；" +
+      "校验 JSON-LD 与页面可见内容的一致性（headline↔H1、发布日期、作者署名）；检查作者/组织/sameAs/联系方式/发布与更新时间等实体标注。" +
+      "只诊断、不修改站点。传 url 现场抓取，或直接传 html 离线分析。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "要诊断的页面 URL（未传 html 时必填）" },
+        html: { type: "string", description: "页面 HTML 原文，离线分析时传入（优先级高于 url）" },
+      },
+    },
+  },
+  {
+    name: "generate_schema_draft",
+    title: "生成 JSON-LD 草稿",
+    description:
+      "按检测到的页面类型生成可复制的 JSON-LD 草稿：只填页面真实存在的信息（标题、日期、作者、价格+币种、问答对、步骤、联系方式等）；" +
+      "拿不到的字段不进入 JSON 正文，在 manualFields 中逐条标注需人工补充；绝不编造作者、评分、价格。" +
+      "页面已有的同类型 JSON-LD 原样保留、只补缺不覆盖。传 url 或 html。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "目标页面 URL（未传 html 时必填）" },
+        html: { type: "string", description: "页面 HTML 原文，离线分析时传入（优先级高于 url）" },
+      },
     },
   },
 ];
@@ -1160,6 +1195,32 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
           "五维对比：SERP 位次 / AI 提及 / GEO 评分 / AI 抓取协议 / 结构化数据。" +
           "抓取失败按 blocked 标注，缺数据源的维度标 unavailable，不留空、不编造。",
       };
+    }
+
+    case "analyze_schema":
+    case "generate_schema_draft": {
+      const inlineHtml = typeof args.html === "string" && args.html.trim() ? args.html : null;
+      const rawUrl = String(args.url ?? "").trim();
+      if (!inlineHtml && !rawUrl) throw new Error("url 与 html 至少提供一个");
+
+      // 离线：直接分析传入 HTML
+      if (inlineHtml) {
+        const url = rawUrl || "inline://html";
+        if (name === "analyze_schema") return analyzeSchema(url, inlineHtml);
+        return buildSchemaDraft(url, inlineHtml);
+      }
+
+      // 在线：抓取后分析
+      const r = await analyzeSchemaUrl(rawUrl);
+      if (!r.ok) {
+        return {
+          ok: false,
+          url: r.finalUrl,
+          httpStatus: r.httpStatus,
+          error: r.error,
+        };
+      }
+      return name === "analyze_schema" ? r.diagnosis : r.draft;
     }
 
     default:

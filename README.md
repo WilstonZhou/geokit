@@ -18,7 +18,7 @@ AIGC:
 ![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
 ![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
 ![Dependencies](https://img.shields.io/badge/direct%20deps-4-brightgreen)
-![MCP](https://img.shields.io/badge/MCP-21%20tools-blue)
+![MCP](https://img.shields.io/badge/MCP-23%20tools-blue)
 
 **中文优先的 SEO / GEO 工具**：自建百度 / 搜狗 / 360 / 神马 / 头条采集，
 六维 GEO 评分，九个 AI 模型的品牌可见性探测，以及一套 AI 抓取协议层。
@@ -75,7 +75,7 @@ open-seo 是个好项目 —— 28 万行代码、自研站点审计爬虫、完
 </tr>
 <tr>
 <td><b>AI 抓取协议层</b><br>20 个 AI 爬虫的 robots 策略 + llms.txt 校验与生成</td>
-<td><b>MCP Server</b><br>21 个核心工具、两种传输方式，附可直接粘贴的接入配置</td>
+<td><b>MCP Server</b><br>23 个核心工具、两种传输方式，附可直接粘贴的接入配置</td>
 </tr>
 <tr>
 <td><img src="docs/screenshots/04-llms.png" alt="AI 抓取协议层"></td>
@@ -160,12 +160,17 @@ POST http://localhost:3210/api/mcp
 }
 ```
 
-十三个工具：
-- 采集与审计：`list_engines`、`check_serp_ranking`、`audit_page`、`check_ai_visibility`
+23 个工具：
+- 采集与审计：`list_engines`、`check_serp_ranking`、`audit_page`、`check_ai_visibility`、`crawl_site`
 - 诊断与修复：`diagnose_page`（全量诊断与体检）、`apply_fixes`（安全幂等自动修复）
 - 时序与数据：`list_observations`（历史观测查询，兼容别名 `query_history`）、`diff_observations`（时序对比与退化判定）
 - 引用情报：`analyze_ai_citations`（引用来源排行 / 竞品频次 / 引用缺口，附 evidence）
 - 协议与对比：`analyze_robots`、`analyze_llms_txt`、`generate_llms_txt`、`compare_with_openseo`
+- 搜索表现：`get_search_performance`、`analyze_search_opportunities`（GSC，可选凭证）
+- 机会引擎：`list_opportunities`、`verify_opportunity`
+- Query 情报：`analyze_query`、`cluster_queries`
+- 竞品：`compare_competitors`（五维对比）
+- Schema：`analyze_schema`（页面类型/字段/一致性/实体诊断）、`generate_schema_draft`（零编造 JSON-LD 草稿）
 
 典型 Agent 闭环：找排名缺口 → 页面深度诊断 → 自动应用修复 → 复查 AI 协议 → 历史比对确认退化/提升。
 
@@ -357,7 +362,7 @@ service account 必须在对应 Search Console 资源里被添加为用户（资
 - `sources`：该机会来自哪些 Observation（id 列表）
 - `verification`：下次复检应观察到的信号变化（signalKey + direction + 描述）
 
-**六种机会类型**（每种都有触发/不触发测试）：
+**七种机会类型**（每种都有触发/不触发测试）：
 
 | 类型 | 触发条件 | 来源 |
 |---|---|---|
@@ -367,6 +372,7 @@ service account 必须在对应 Search Console 资源里被添加为用户（资
 | `site-issue-high` | T4 issues 中 severity="high" 的问题 | T4 |
 | `search-opportunity` | T5 GscOpportunity[] 非空（缺省跳过不报错） | T5（可选） |
 | `missing-entity` | 页面审计检测出缺 Schema/作者/组织/发布时间 | audit.ts |
+| `schema-issue` | T10 Schema 必填/推荐字段缺失、与页面内容矛盾 | schema/（T10） |
 
 **排序规则**（`src/lib/opportunity/engine.ts`，常量透明）：
 1. 按 impact（high→medium→low）；
@@ -447,6 +453,20 @@ Query → SERP → 搜索意图 → 实体/问题 → 竞品 → AI 答案 → �
 - MCP 工具：`compare_competitors`；
 - 页面：`/competitors`（粘贴 JSON 即可生成五维对比与差距清单）。
 
+## Schema / 实体诊断（T10）
+
+规则驱动的结构化数据诊断与 JSON-LD 草稿生成 —— **只诊断、给草稿，不自动修改站点**。
+
+1. **页面类型检测**：文章 / 产品 / FAQ / HowTo / 本地商家 / 组织 / 官网，强信号（顶层 JSON-LD `@type`，high）+ 弱信号启发（疑问句标题、价格+购买按钮、tel+地址、有序步骤、发布时间 meta 等，medium/low），每条判定附 signal/source/value 依据；判定不了返回 `unknown`，不硬猜。
+2. **字段完整性**：按 Schema.org 字段目录（常量导出、透明可测）检查必填/推荐字段的 `missing / empty / incomplete`，支持 `mainEntity[].acceptedAnswer.text` 等数组路径覆盖度检查。
+3. **一致性**：`headline ↔ H1`、`datePublished ↔ 页面/meta 日期`、`author ↔ 署名`、机构名 ↔ 站点名；两侧矛盾记 `mismatch`，疑似记 `suspect`。
+4. **实体清晰度**：作者、组织、sameAs、联系方式、发布/更新时间，标注来源（jsonld/meta/visible）。
+5. **零编造草稿**：草稿 JSON 正文只含页面真实信息；拿不到的字段（尤其价格币种、评分、SKU、品牌）**绝不入 JSON**，在 `manualFields[]` 中标注「需人工补充」；已有同类型 JSON-LD 原样保留只补缺；`sourcedFrom[]` 让每个字段都能指回页面来源。
+6. **进入机会引擎**：第 7 类机会 `schema-issue`（必填缺失 high / 其余 medium，effort=low），复检信号 `schemaMissingRequiredCount` decrease。
+
+- MCP 工具：`analyze_schema`、`generate_schema_draft`（均支持 url 抓取或 html 离线注入）；
+- 页面：`/schema`；POST `/api/schema`。
+
 ## 命令行与 CI 门禁（CLI）
 
 GEOkit 提供独立于 Web 服务的轻量级 CLI 工具（冷启动、确定性退出码、支持 GitHub Code Scanning SARIF 格式）：
@@ -505,7 +525,7 @@ src/
     serp.ts        多引擎采集与自然排名解析
     audit.ts       页面技术审计聚合
     llms.ts        robots.txt AI 策略分析 + llms.txt 规范校验与生成器
-    mcp.ts         MCP Server（支持 Streamable HTTP 与 stdio，提供 13 个核心工具）
+    mcp.ts         MCP Server（支持 Streamable HTTP 与 stdio，提供 23 个核心工具）
   app/
     api/           REST API 路由（audit, serp, visibility, llms, mcp, observations）
     (views)/       Next.js 现代化仪表盘（audit, serp, visibility, llms, mcp）

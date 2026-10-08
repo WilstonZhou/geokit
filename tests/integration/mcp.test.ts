@@ -34,7 +34,7 @@ describe("MCP Server Integration Tests", () => {
     const tools = listRes.result.tools;
     const names = tools.map((t) => t.name);
 
-    assert.strictEqual(tools.length, 21);
+    assert.strictEqual(tools.length, 23);
     assert.ok(names.includes("list_engines"));
     assert.ok(names.includes("check_serp_ranking"));
     assert.ok(names.includes("audit_page"));

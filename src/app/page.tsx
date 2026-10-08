@@ -86,6 +86,13 @@ const CAPABILITIES = [
     href: "/competitors",
     highlight: "不做反链，聚焦 AI 与 SERP",
   },
+  {
+    icon: "{ }",
+    title: "Schema / 实体诊断",
+    desc: "规则驱动检测文章/产品/FAQ/HowTo/本地商家/组织/官网类型，校验必填推荐字段与 JSON-LD↔页面一致性，检查作者/组织/sameAs/联系方式/时间标注，输出可复制的零编造 JSON-LD 草稿。",
+    href: "/schema",
+    highlight: "只诊断不改站，草稿绝不编造",
+  },
 ];
 
 export default function Home() {

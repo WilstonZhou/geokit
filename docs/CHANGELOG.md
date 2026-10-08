@@ -13,6 +13,59 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
+## [Phase 2 T10] — 2026-10-08 · Schema / 实体诊断与零编造 JSON-LD 草稿
+
+> 规则驱动检测 7 类页面，校验 Schema 字段完整性与 JSON-LD↔页面一致性，输出可复制的零编造草稿。只诊断、不修改站点。结论作为第 7 类机会 `schema-issue` 进入 Opportunity Engine。
+
+### 核心变更
+
+**新增文件（10 个）**：
+- `src/lib/schema/types.ts` — PageType（article/product/faq/howto/local-business/organization/website/unknown）、FieldCheck、ConsistencyIssue、EntityClarity、SchemaDiagnosis、SchemaDraft/ManualField
+- `src/lib/schema/extract.ts` — 完整 JSON-LD 节点解析（含 @graph/嵌套下钻）+ 顶层 rootTypes 提取 + 页面可见事实（H1、meta 日期/作者、mailto/tel、可见日期、Q&A 对、有序步骤、价格与币种、社交外链、地址、搜索动作）
+- `src/lib/schema/detect.ts` — 两级规则检测（强：顶层 @type→high；弱：可见启发→medium/low），判定常量全部导出，每条结论带 TypeSignal 依据
+- `src/lib/schema/fields.ts` — 导出 `FIELD_CATALOG`（每类型 required/recommended）；missing/empty/incomplete/present 检查（支持 `mainEntity[].acceptedAnswer.text` 数组覆盖度）；headline↔H1、datePublished↔页面/meta 日期、author↔署名、机构名↔站点名一致性
+- `src/lib/schema/entity.ts` — 作者/组织/sameAs/联系方式/发布时间/更新时间（来源 jsonld>meta>visible）
+- `src/lib/schema/draft.ts` — 零编造草稿：JSON 正文只含真实值，无值字段进 manualFields；已有同类型 JSON-LD 只补缺不覆盖；sourcedFrom 逐字段溯源
+- `src/lib/schema/analyze.ts` + `index.ts` — `analyzeSchema(url, html)` 纯函数、`buildSchemaDraft`、`analyzeSchemaUrl`（fetchWithPolicy 包装）
+- `src/app/api/schema/route.ts` — POST（url 或 html，失败 502 如实返回）
+- `src/app/schema/page.tsx` — 类型判定/字段 checklist/一致性告警/实体信号/建议/可复制 JSON+人工补充清单+来源核对
+- `tests/unit/schema.test.ts` — 37 个用例
+
+**修改文件（6 个）**：
+- `src/lib/opportunity/types.ts` — OPPORTUNITY_TYPES 6→7（+`schema-issue`）；OpportunityInput +可选 `schemaDiagnoses?`
+- `src/lib/opportunity/generators.ts` — 新增 `genSchemaIssue`（必填缺失=high，推荐缺口/矛盾/实体缺失=medium，effort=low；verification=`schemaMissingRequiredCount` decrease）
+- `src/lib/opportunity/engine.ts` — 接入第 7 生成器；countByType +1
+- `src/lib/mcp.ts` — +2 工具 `analyze_schema` / `generate_schema_draft`（支持 url 抓取或 html 离线注入），21→23
+- `src/app/page.tsx` + `src/app/opportunities/page.tsx` — 首页入口卡片 + schema-issue 统计
+- `README.md` — MCP badge/正文/项目结构工具数同步 23（顺带修正项目结构中遗留的 13）；新增「Schema / 实体诊断（T10）」章节；机会类型表 6→7
+- `tests/integration/mcp.test.ts` — 工具计数 21→23
+
+### 设计原则（零编造的边界）
+
+1. **JSON 正文 vs 人工补充双视图**：任务要求"拿不到的字段留空标注"与验收"页面没有的信息不能出现在草稿里"这样统一 —— 草稿 JSON 只放真实值（JSON.parse + 结构校验可直接过）；拿不到的字段只出现在 `manualFields[]`（路径 + 理由），不出现空壳键。
+2. **价格双要件**：数值与币种必须同时可观测才生成 offers；`aggregateRating` / sku / brand 永不做文本猜测，只可能来自现存 JSON-LD（防虚假评分处罚）。
+3. **弱信号不硬猜**：@graph 中 Organization/WebSite 是文章页常见 publisher —— 内容类型（Article/Product/FAQPage/HowTo/LocalBusiness）存在时结构类型不允许登顶；无任何信号返回 `unknown`。
+4. **规则透明**：类型模式、弱信号门槛（FAQ_MIN_QUESTIONS=2 等）、字段目录均为导出常量。
+5. **只诊断不改站**：不写回任何站点资源；分析器是纯函数，在线抓取走 fetchWithPolicy、不做 Evidence 落盘（建议性旁路）。
+
+### 验收对照
+
+- ✅ 每种页面类型有测试（7 类 + unknown，强/弱信号分别覆盖，含 @graph publisher 不喧宾夺主的回归用例）
+- ✅ 草稿通过 JSON.parse 与结构校验（@context/@type/各类型核心结构）
+- ✅ 专项测试证明页面没有的信息不出现在草稿（无币种→无 offers；无品牌/评分/SKU/作者→键不存在，仅在 manualFields 标注）
+- ✅ 必填缺失触发 schema-issue(high)；完整页面零机会；引擎缺输入优雅跳过
+
+### 验证
+
+- typecheck ✅ · lint ✅ · test ✅（37 个新增全通过）· build ✅（全量门禁见提交前汇总）
+- MCP 工具数 21→23，零新增依赖
+
+### 已知限制 / 待办
+
+- 弱信号日期兜底：无 meta/JSON-LD 时草稿取正文首个可见日期作为 datePublished（sourcedFrom 标注 visible:date 供人工核对），页脚版权年等噪声场景可能误选，后续可按"距 H1 最近"优化。
+- 地址只提取单行线索填 streetAddress，addressLocality/geo/openingHours 需人工补充。
+- 潜在架构建议（不在本轮范围）：opportunity/types.ts 现 type-only 依赖 schema/types，未来若生成器继续增多，可考虑让各 T 模块自注册生成器而不是集中改 engine.ts。
+
 ## [Phase 2 T9] — 2026-10-08 · 内容质量信号增强（scoringVersion 2.1.0）
 
 > 并入现有 GEO 六维体系，不新增并行总分；新增 `scoringVersion` 字段防止历史 diff 被规则换代污染。

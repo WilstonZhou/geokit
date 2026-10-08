@@ -24,6 +24,7 @@ const TYPE_META: Record<
   "site-issue-high": { label: "高影响项", tone: "bad" },
   "search-opportunity": { label: "搜索机会", tone: "info" },
   "missing-entity": { label: "实体缺失", tone: "warn" },
+  "schema-issue": { label: "Schema 问题", tone: "bad" },
 };
 
 const IMPACT_TONE: Record<string, "bad" | "warn" | "neutral"> = {
