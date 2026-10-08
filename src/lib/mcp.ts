@@ -43,6 +43,10 @@ import {
   type QueryClusterInput,
   type ClusterOptions,
 } from "./query";
+import {
+  analyzeCompetitors,
+  type CompetitorInput,
+} from "./competitor";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
@@ -492,6 +496,43 @@ export const TOOLS: ToolDef[] = [
         minSharedUrls: { type: "number", description: "共享 URL 数下限，默认 2" },
       },
       required: ["queries"],
+    },
+  },
+  {
+    name: "compare_competitors",
+    title: "竞品情报对比",
+    description:
+      "五维竞品对比：SERP 位次、AI 提及/引用、GEO 评分、AI 抓取协议、结构化数据。" +
+      "抓取失败按 blocked 标注不留空；缺数据源的维度标 unavailable 不报错。" +
+      "最多 5 个竞品。差距清单可直接转入 Opportunity Engine。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        userDomain: { type: "string", description: "你的域名" },
+        competitors: {
+          type: "array",
+          items: { type: "string" },
+          description: "竞品域名列表（1-5 个）",
+        },
+        queries: {
+          type: "array",
+          items: { type: "string" },
+          description: "query 列表（SERP/AI 维度用）",
+        },
+        serpResults: { type: "array", description: "预收集的 SERP 响应（可选）" },
+        aiCitations: { type: "array", description: "预收集的 AI 引用记录（可选）" },
+        userPageAudits: { type: "array", description: "用户页面审计结果（可选）" },
+        competitorPageAudits: { type: "array", description: "竞品页面审计结果（可选）" },
+        competitorPageUrls: { type: "array", description: "竞品关键页面 URL（可选，需 fetchProtocol=true）" },
+        userRobots: { type: "object", description: "用户 robots 分析结果（可选）" },
+        userLlmsTxt: { type: "object", description: "用户 llms.txt 分析结果（可选）" },
+        competitorRobots: { type: "array", description: "竞品 robots 分析结果（可选）" },
+        competitorLlmsTxt: { type: "array", description: "竞品 llms.txt 分析结果（可选）" },
+        fetchProtocol: { type: "boolean", description: "是否允许现场抓取（geo/protocol 维度无预收集数据时）" },
+        userCrawl: { type: "object", description: "用户站点爬取结果（可选，schema/geo 维度可用）" },
+        competitorCrawls: { type: "array", description: "竞品站点爬取结果（可选）" },
+      },
+      required: ["userDomain", "competitors"],
     },
   },
 ];
@@ -1069,6 +1110,55 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
           clusters.length === 0
             ? "无符合条件的簇（共享 URL 不足或 Jaccard < 阈值）。"
             : `共 ${clusters.length} 个簇，最大簇含 ${Math.max(...clusters.map((c) => c.queries.length))} 个 query。`,
+      };
+    }
+
+    case "compare_competitors": {
+      const userDomain = String(args.userDomain ?? "").trim();
+      const competitors = Array.isArray(args.competitors)
+        ? (args.competitors as unknown[]).map(String).filter(Boolean).slice(0, 5)
+        : [];
+      if (!userDomain) throw new Error("缺少 userDomain");
+      if (competitors.length === 0) throw new Error("至少需要 1 个竞品域名");
+
+      const input: CompetitorInput = { userDomain, competitors };
+      if (Array.isArray(args.queries)) input.queries = (args.queries as unknown[]).map(String);
+      if (Array.isArray(args.serpResults)) input.serpResults = args.serpResults as CompetitorInput["serpResults"];
+      if (Array.isArray(args.aiCitations)) input.aiCitations = args.aiCitations as CompetitorInput["aiCitations"];
+      if (Array.isArray(args.userPageAudits)) input.userPageAudits = args.userPageAudits as CompetitorInput["userPageAudits"];
+      if (Array.isArray(args.competitorPageAudits)) input.competitorPageAudits = args.competitorPageAudits as CompetitorInput["competitorPageAudits"];
+      if (Array.isArray(args.competitorPageUrls)) input.competitorPageUrls = args.competitorPageUrls as CompetitorInput["competitorPageUrls"];
+      if (args.userRobots && typeof args.userRobots === "object") input.userRobots = args.userRobots as CompetitorInput["userRobots"];
+      if (args.userLlmsTxt && typeof args.userLlmsTxt === "object") input.userLlmsTxt = args.userLlmsTxt as CompetitorInput["userLlmsTxt"];
+      if (Array.isArray(args.competitorRobots)) input.competitorRobots = args.competitorRobots as CompetitorInput["competitorRobots"];
+      if (Array.isArray(args.competitorLlmsTxt)) input.competitorLlmsTxt = args.competitorLlmsTxt as CompetitorInput["competitorLlmsTxt"];
+      if (typeof args.fetchProtocol === "boolean") input.fetchProtocol = args.fetchProtocol;
+      if (args.userCrawl && typeof args.userCrawl === "object") input.userCrawl = args.userCrawl as CompetitorInput["userCrawl"];
+      if (Array.isArray(args.competitorCrawls)) input.competitorCrawls = args.competitorCrawls as CompetitorInput["competitorCrawls"];
+
+      const report = await analyzeCompetitors(input);
+      return {
+        userDomain: report.userDomain,
+        competitors: report.competitors,
+        dimensions: report.dimensions.map((d) => ({
+          dimension: d.dimension,
+          summary: d.summary,
+          gap: d.gap,
+          gapDetail: d.gapDetail,
+          userValue: d.userValue,
+          userStatus: d.userStatus,
+          competitorValues: d.competitorValues.map((cv) => ({
+            domain: cv.domain,
+            value: cv.value,
+            status: cv.status,
+            statusReason: cv.statusReason,
+          })),
+        })),
+        gaps: report.gaps,
+        sourceAvailability: report.sourceAvailability,
+        note:
+          "五维对比：SERP 位次 / AI 提及 / GEO 评分 / AI 抓取协议 / 结构化数据。" +
+          "抓取失败按 blocked 标注，缺数据源的维度标 unavailable，不留空、不编造。",
       };
     }
 

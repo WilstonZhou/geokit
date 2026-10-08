@@ -13,6 +13,62 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
+## [Phase 2 T8] — 2026-10-08 · 竞品情报
+
+> 五维竞品对比：SERP 位次 / AI 提及 / GEO 评分 / AI 抓取协议 / 结构化数据。不做反链。
+
+### 核心变更
+
+**新增文件（10 个）**：
+- `src/lib/competitor/types.ts` — 核心类型（CompetitorDimension, CompetitorStatus, DimensionComparison\<T\>, CompetitorGap, CompetitorInput, CompetitorReport）
+- `src/lib/competitor/serp.ts` — `compareSerpPositions` 纯函数，从 SerpResponse[] 提取用户与竞品位次
+- `src/lib/competitor/ai.ts` — `compareAiMentions` 纯函数，从 CitationRecord[] 聚合提及/引用
+- `src/lib/competitor/geo.ts` — `compareGeoScores` async，对竞品关键页面调 auditUrl（礼貌爬取 + blocked 原则）
+- `src/lib/competitor/protocol.ts` — `compareAiCrawlProtocol` async，复用 analyzeRobots / analyzeLlmsTxt
+- `src/lib/competitor/schema.ts` — `compareStructuredData` 纯函数，对比 JSON-LD 类型覆盖
+- `src/lib/competitor/gaps.ts` — `buildGapList` 纯函数，聚合 5 维差距清单
+- `src/lib/competitor/analyze.ts` + `index.ts` — `analyzeCompetitors` 主入口编排
+- `src/app/api/competitors/route.ts` — POST API
+- `src/app/competitors/page.tsx` — 交互页面
+
+**修改文件**：
+- `src/lib/mcp.ts` — 新增 `compare_competitors` 工具（20→21），import + TOOLS + callTool
+- `tests/integration/mcp.test.ts` — 断言 20→21
+- `src/app/page.tsx` — CAPABILITIES 8→9，"七项"→"九项"
+- `README.md` — badge 20→21，新增「竞品情报」章节
+- `docs/CHANGELOG.md` — 本条
+
+**设计原则**：
+- 抓取失败按 blocked/unavailable 在对比表明确标注（statusReason 必填），不留空
+- 所有对比结论有 evidence（signal + source + value）
+- 缺数据源的维度标 unavailable 不报错
+- 纯函数维度（serp/ai/schema）不 fetch；async 维度（geo/protocol）仅在无预收集数据时 fetch
+- 最多 5 个竞品
+- 差距清单按 severity（high→medium→low）排序，可转入 Opportunity Engine
+
+### 验证
+
+- typecheck ✅
+- lint ✅（0 errors，9 pre-existing warnings）
+- test ✅ 352/352 pass（+17 new）
+- build ✅
+
+### 已知限制 / 待办（建议）
+
+- 未串联 UI「先爬再对比」引导流（当前需手动拼 JSON 输入）
+- GEO 维度现场抓取无并发限制（URL 总数通常很少，暂可接受）
+- AI 维度中 `competitorsMentioned` 与竞品域名的匹配依赖收集时传入的格式一致性
+
+## [Phase 2 T1-T7 清理] — 2026-10-08
+
+> 修复审查发现的问题。
+
+### 核心变更
+
+- `.gitignore` — 新增 `*.db`（防止 SQLite 文件误提交）
+- `README.md` — badge `13 tools`→`21 tools`、表格 `12 个核心工具`→`21 个核心工具`
+- `src/lib/store/index.ts` — 注释修正（SqliteStore 静态导入行为说明）
+
 ## [Phase 2 T7] — 2026-10-08 · Query Intelligence（轻量）
 
 > 把一个 query 的已有观测汇总：意图 → 问题 → 竞品 → AI 引用 → 内容缺口 → 聚类。

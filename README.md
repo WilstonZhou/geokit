@@ -18,7 +18,7 @@ AIGC:
 ![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
 ![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
 ![Dependencies](https://img.shields.io/badge/direct%20deps-4-brightgreen)
-![MCP](https://img.shields.io/badge/MCP-13%20tools-blue)
+![MCP](https://img.shields.io/badge/MCP-21%20tools-blue)
 
 **中文优先的 SEO / GEO 工具**：自建百度 / 搜狗 / 360 / 神马 / 头条采集，
 六维 GEO 评分，九个 AI 模型的品牌可见性探测，以及一套 AI 抓取协议层。
@@ -75,7 +75,7 @@ open-seo 是个好项目 —— 28 万行代码、自研站点审计爬虫、完
 </tr>
 <tr>
 <td><b>AI 抓取协议层</b><br>20 个 AI 爬虫的 robots 策略 + llms.txt 校验与生成</td>
-<td><b>MCP Server</b><br>12 个核心工具、两种传输方式，附可直接粘贴的接入配置</td>
+<td><b>MCP Server</b><br>21 个核心工具、两种传输方式，附可直接粘贴的接入配置</td>
 </tr>
 <tr>
 <td><img src="docs/screenshots/04-llms.png" alt="AI 抓取协议层"></td>
@@ -418,6 +418,29 @@ Query → SERP → 搜索意图 → 实体/问题 → 竞品 → AI 答案 → �
 
 - MCP 工具：`analyze_query`、`cluster_queries`；
 - 页面：`/queries`（单 query 分析 / 多 query 聚类双模式）。
+
+## 竞品情报
+
+不做反链对比。聚焦 AI 与 SERP，五维对比帮你看清竞品领先的地方：
+
+| 维度 | 对比内容 | 数据源 |
+|------|---------|--------|
+| SERP 位次 | 多引擎下用户与竞品的平均位次 | `SerpResponse[]` |
+| AI 提及/引用 | 被提及频次、被引用频次与位置 | `CitationRecord[]` |
+| GEO 评分 | 关键页面六维 GEO 评分对比 | `PageAudit[]`（可现场抓取） |
+| AI 抓取协议 | robots AI 开放度 + llms.txt | `RobotsAnalysis` / `LlmsTxtAnalysis`（可现场抓取） |
+| 结构化数据 | JSON-LD 类型覆盖面 | `PageAudit[]` 或 `CrawlResult` |
+
+**设计原则**：
+- 抓取失败按 `blocked` / `unavailable` 在对比表明确标注（`statusReason` 必填），不留空、不编造；
+- 所有对比结论有 `evidence`（signal + source + value）；
+- 缺数据源的维度标 `unavailable` 不报错；
+- 纯函数维度（SERP / AI / Schema）不 fetch；async 维度（GEO / Protocol）仅在无预收集数据时才 fetch；
+- 最多 5 个竞品；
+- 差距清单（`CompetitorGap[]`）按 severity 排序，可直接转入 Opportunity Engine。
+
+- MCP 工具：`compare_competitors`；
+- 页面：`/competitors`（粘贴 JSON 即可生成五维对比与差距清单）。
 
 ## 命令行与 CI 门禁（CLI）
 

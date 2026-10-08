@@ -79,6 +79,13 @@ const CAPABILITIES = [
     href: "/queries",
     highlight: "规则驱动，缺数据标 unavailable",
   },
+  {
+    icon: "⚡",
+    title: "竞品情报",
+    desc: "五维竞品对比：SERP 位次、AI 提及/引用、GEO 评分、AI 抓取协议、结构化数据。抓取失败按 blocked 标注，差距清单可转入 Opportunity Engine。",
+    href: "/competitors",
+    highlight: "不做反链，聚焦 AI 与 SERP",
+  },
 ];
 
 export default function Home() {
@@ -126,7 +133,7 @@ export default function Home() {
       {/* 核心能力 */}
       <section>
         <SectionTitle
-          title="七项核心能力"
+          title="九项核心能力"
           desc="每一项都针对实测出的 open-seo 空白区，而不是为了差异化而差异化。"
         />
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
