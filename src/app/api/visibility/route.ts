@@ -26,7 +26,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "请求体必须是 JSON" }, { status: 400 });
   }
 
-  const { brand, topic } = (body ?? {}) as { brand?: string; topic?: string };
+  const { brand, topic, competitors } = (body ?? {}) as {
+    brand?: string;
+    topic?: string;
+    competitors?: unknown;
+  };
   if (!brand || !brand.trim() || !topic || !topic.trim()) {
     return NextResponse.json(
       { error: "需要提供 brand 与 topic 两个参数" },
@@ -34,8 +38,14 @@ export async function POST(req: Request) {
     );
   }
 
+  // T2：竞品清单可选传入（字符串数组），用于标注答案中提及了哪些竞品
+  const competitorList =
+    Array.isArray(competitors) && competitors.every((c) => typeof c === "string")
+      ? (competitors as string[])
+      : [];
+
   try {
-    return NextResponse.json(await probeVisibility(brand, topic));
+    return NextResponse.json(await probeVisibility(brand, topic, competitorList));
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : String(e) },

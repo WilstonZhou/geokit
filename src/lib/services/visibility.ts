@@ -53,13 +53,14 @@ export function configuredProviders(): {
 /** HTTP / MCP 共用的唯一入口 */
 export async function probeVisibility(
   brand: string,
-  topic: string
+  topic: string,
+  competitors: string[] = []
 ): Promise<VisibilityReport> {
   const b = brand.trim();
   const t = topic.trim();
   if (!b || !t) throw new Error("需要提供 brand 与 topic 两个参数");
 
-  return runVisibilityMatrix(b, t, collectProviderKeys());
+  return runVisibilityMatrix(b, t, collectProviderKeys(), competitors);
 }
 
 /**
@@ -82,10 +83,13 @@ export async function batchProbeVisibility(
   brand: string,
   topics: string[],
   concurrency: number = 2,
-  probe: (brand: string, topic: string) => Promise<VisibilityReport> = (b, t) =>
-    runVisibilityMatrix(b, t, collectProviderKeys())
+  probe?: (brand: string, topic: string) => Promise<VisibilityReport>,
+  competitors: string[] = []
 ): Promise<VisibilityReport[]> {
   const reports: VisibilityReport[] = [];
+  const doProbe =
+    probe ??
+    ((b: string, t: string) => runVisibilityMatrix(b, t, collectProviderKeys(), competitors));
 
   // A simple async pool for concurrency limit
   const runTasks = async () => {
@@ -96,7 +100,7 @@ export async function batchProbeVisibility(
         const t = topics[idx];
         if (!brand.trim() || !t.trim()) continue;
         try {
-          const report = await probe(brand, t);
+          const report = await doProbe(brand, t);
           reports.push(report);
         } catch (e) {
           console.error("Failed to probe visibility for " + t, e);

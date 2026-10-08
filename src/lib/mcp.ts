@@ -22,7 +22,6 @@ import { analyzeRobots, analyzeLlmsTxt, generateLlmsTxtDraft } from "./llms";
 import { searchRankings } from "./services/serp";
 import { probeVisibility, samplingProfile, batchProbeVisibility } from "./services/visibility";
 import { analyzeCitations, diffCitationRecords } from "./visibility/aggregate";
-import { extractCitations } from "./visibility/parser";
 import { checkUrl, checkHtml, autoFixHtml } from "./services/diagnosis";
 import { listObservationHistory, latestObservationDiff } from "./services/observations";
 import { diffObservations } from "./diff";
@@ -125,6 +124,10 @@ export const TOOLS: ToolDef[] = [
             type: "array",
             items: { type: "string" },
             description: "需要监控的竞品品牌或域名列表"
+          },
+          concurrency: {
+            type: "number",
+            description: "并发上限（可选，默认 2，范围 1–5）。保守默认值避免对厂商造成压力"
           }
         },
         required: ["queries", "brand", "domain"]
@@ -143,6 +146,11 @@ export const TOOLS: ToolDef[] = [
       properties: {
         brand: { type: "string", description: "品牌名/公司名，用于检测是否被提及" },
         topic: { type: "string", description: "提问主题，如「跨境支付平台推荐」" },
+        competitors: {
+          type: "array",
+          items: { type: "string" },
+          description: "竞品品牌词列表（可选）。传入后每个探针的引用记录会标注答案中提及了哪些竞品",
+        },
       },
       required: ["brand", "topic"],
     },
@@ -366,36 +374,18 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       const brand = String(args.brand);
       const domain = String(args.domain);
       const competitors = (args.competitors as string[]) || [];
+      const concurrency = Math.max(1, Math.min(5, Number(args.concurrency) || 2));
 
-      const reports = await batchProbeVisibility(brand, queries, 3);
+      // T2：竞品清单全程在探测链路中透传，不再靠二次 extract 兜底
+      const reports = await batchProbeVisibility(
+        brand, queries, concurrency, undefined, competitors
+      );
 
       // 汇总每个 (query, model) 的引用记录；模型响应里没有链接就是 unavailable,不编造
       const records: CitationRecord[] = [];
       for (const report of reports) {
         for (const probe of report.probes) {
-          let cit = probe.citation;
-          if (cit && competitors.length > 0 && probe.rawResponse) {
-            // 竞品提及依赖调用方传入的竞品清单 —— 带着清单重新提取一次
-            cit = extractCitations(
-              probe.rawResponse,
-              cit.query,
-              cit.model,
-              probe.mentioned,
-              brand,
-              competitors
-            );
-          }
-          if (!cit && probe.rawResponse) {
-            cit = extractCitations(
-              probe.rawResponse,
-              report.prompt,
-              probe.providerName,
-              probe.mentioned,
-              brand,
-              competitors
-            );
-          }
-          if (cit) records.push(cit);
+          if (probe.citation) records.push(probe.citation);
         }
       }
 
@@ -429,9 +419,12 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
     case "check_ai_visibility": {
       const brand = String(args.brand ?? "").trim();
       const topic = String(args.topic ?? "").trim();
+      const competitors = Array.isArray(args.competitors)
+        ? (args.competitors as unknown[]).map(String)
+        : [];
       if (!brand || !topic) throw new Error("缺少 brand 或 topic");
       // key 的收集同样下沉到 service —— MCP 侧不再有自己的一份环境变量逻辑
-      const report = await probeVisibility(brand, topic);
+      const report = await probeVisibility(brand, topic, competitors);
       return {
         brand: report.brand,
         visibilityScore: report.visibilityScore,
@@ -478,6 +471,15 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
           rawResponseChars: p.rawResponse?.length ?? 0,
           unobservableReason: p.unobservableReason ?? null,
           elapsedMs: p.elapsedMs,
+          // T2：引用情报摘要（新增字段，向后兼容）。citationsStatus != "ok" 时没有编造任何 URL
+          citation: p.citation
+            ? {
+                citationsStatus: p.citation.citationsStatus,
+                citations: p.citation.citations,
+                competitorsMentioned: p.citation.competitorsMentioned,
+                mentionContext: p.citation.mentionContext ?? null,
+              }
+            : null,
         })),
       };
     }

@@ -73,6 +73,7 @@ function cellTitle(p: Probe): string {
 export default function VisibilityPage() {
   const [brand, setBrand] = useState("");
   const [topicsText, setTopicsText] = useState("");
+  const [competitorsText, setCompetitorsText] = useState("");
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   /** 每个 query 一份报告 —— 矩阵与卡片都从这里来 */
@@ -98,6 +99,10 @@ export default function VisibilityPage() {
       new Set(topicsText.split("\n").map((t) => t.trim()).filter(Boolean))
     ).slice(0, 10);
     if (!brand.trim() || topics.length === 0) return;
+    // 竞品清单：逗号/空格分隔，可选。只用于标注答案里提到了哪些竞品
+    const competitors = Array.from(
+      new Set(competitorsText.split(/[,，\s]+/).map((c) => c.trim()).filter(Boolean))
+    );
 
     setLoading(true); setErr(null); setReports([]);
     setProgress({ done: 0, total: topics.length });
@@ -107,7 +112,7 @@ export default function VisibilityPage() {
         const res = await fetch("/api/visibility", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ brand: brand.trim(), topic }),
+          body: JSON.stringify({ brand: brand.trim(), topic, competitors }),
         });
         const json = await res.json();
         if (!res.ok) throw new Error(json.error ?? "探测失败");
@@ -167,6 +172,14 @@ export default function VisibilityPage() {
               placeholder={"例如：\n跨境支付平台有哪些推荐\n地热能是什么"}
               value={topicsText}
               onChange={(e) => setTopicsText(e.target.value)}
+            />
+          </Field>
+          <Field label="竞品（可选）" hint="逗号或空格分隔。模型答案里提到这些竞品时会单独标注">
+            <input
+              className={inputCls}
+              placeholder="例如：竞品A, 竞品B"
+              value={competitorsText}
+              onChange={(e) => setCompetitorsText(e.target.value)}
             />
           </Field>
         </div>

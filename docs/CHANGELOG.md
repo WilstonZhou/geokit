@@ -13,6 +13,24 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
+## [Phase 2 T2 补齐] — 2026-10-08 · 竞品链路全程透传 + 并发/超时可配置 + 五态测试补全
+
+> 对照 T2 任务书逐条复核后发现的三个真实缺口，本轮补齐。
+
+### 核心变更
+
+1. **竞品列表由用户传入（T2 #1 补全）**：`competitors` 从 MCP 工具入参 → `probeVisibility` / `batchProbeVisibility` → `runVisibilityMatrix` → `probeProvider`（`ProbeContext.competitors`）→ `buildObservedProbe` → `extractCitations` 全程透传，探针落库前竞品提及就写入 CitationRecord。删除 `analyze_ai_citations` 里「拿到 rawResponse 后带竞品清单重新 extract」的兜底补丁（竞品本应在采集时记录，事后重提会让落库记录与输出记录口径不一致）。
+2. **并发与超时可配置（T2 #2 补全）**：`analyze_ai_citations` 新增可选 `concurrency`（默认 2，clamp 1–5，替代硬编码 3）；单次 AI 调用超时支持 `GEOKIT_AI_TIMEOUT_MS` 环境变量覆盖（默认 30s）。
+3. **`check_ai_visibility` 升级（向后兼容）**：新增可选 `competitors` 入参；probes 输出新增 `citation` 摘要（citationsStatus / citations / competitorsMentioned / mentionContext），旧字段一行未动。
+4. **页面**：`/visibility` 增加可选竞品输入（逗号/空格分隔），随探测请求透传。
+5. **测试**：`visibility-batch.test.ts` 新增「同一 query 内单模型 BLOCKED/ERROR/UNOBSERVABLE 不影响其他模型」用例，并断言失败态探针绝不产出引用记录 —— T2 验收的「有引用 / 无引用 / 模型拒答 / 超时 / HTTP 错误」五态至此全部有显式覆盖（126 项通过）。
+
+### 验证
+
+- `npm test`：126 项全量通过（+1）；`npm run typecheck`：0 error；`npm run lint`：0 error；`npm run build`：成功。
+
+---
+
 ## [Phase 2 T1/T2] — 2026-10-07 · 观测模型扩展（schema 强校验 + 协议观测落库）与 AI 引用情报
 
 > 目标：补齐 Phase 2 任务链 T1（Observation/Evidence/CitationRecord 数据模型 + 存档 + MCP 查询）与 T2（AI 引用情报）的验收缺口。核心原则不变：零新增依赖、「抓不到就说抓不到」在数据层强制执行、每条结论附 evidence。

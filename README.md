@@ -234,6 +234,9 @@ MCP 查询入口：`list_observations` 按 kind / subject / 时间过滤历史�
 ### 批量、对比与聚合
 
 - 多 query 批量探测（并发上限可配置，默认保守值 2；探测函数可注入便于测试），单个模型失败不影响其他模型；
+- 竞品监控：`check_ai_visibility` 与 `analyze_ai_citations` 均接受可选 `competitors` 列表，
+  答案中提及的竞品会标注在每条引用记录上（`competitorsMentioned`）；单次调用超时可用
+  `GEOKIT_AI_TIMEOUT_MS` 环境变量覆盖（默认 30s）；
 - `/visibility` 页面提供 query × model 矩阵，`unavailable` / `blocked` 状态明确展示原因，不留空白；
 - 与上一次观测自动 diff：哪些模型新增 / 失去了提及或引用；
 - MCP 工具 `analyze_ai_citations` 输出引用来源排行、竞品出现频次、引用缺口

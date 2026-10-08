@@ -137,4 +137,32 @@ describe("T2: batchProbeVisibility 批量探测（注入假 probe）", () => {
     const reports = await batchProbeVisibility("brand1", ["", "  ", "q1"], 2, probe);
     assert.equal(reports.length, 1);
   });
+
+  it("同一 query 内：单模型被拒（BLOCKED）/故障（ERROR）不影响其他模型", async () => {
+    // 真实场景：probeProvider 对 4xx 返回 BLOCKED、对 5xx/网络异常返回 ERROR，
+    // 这两条路径不产生 citation（没有响应文本可提取），也绝不能编造
+    const probe = async (_brand: string, topic: string) =>
+      fakeReport(topic, [
+        fakeProbe("BLOCKED"), // 厂商 4xx 拒绝
+        fakeProbe("ERROR"), // HTTP 500 / 网络故障
+        fakeProbe("UNOBSERVABLE"), // 未配 key
+        fakeProbe("MENTIONED", fakeCitation(topic, "模型D", ["https://ok.com/1"])),
+      ]);
+
+    const reports = await batchProbeVisibility("brand1", ["q-mixed"], 2, probe);
+    assert.equal(reports.length, 1);
+    const probes = reports[0].probes;
+    assert.equal(probes.length, 4);
+
+    // 失败态探针如实保留状态，且不带任何引用记录
+    for (const st of ["BLOCKED", "ERROR", "UNOBSERVABLE"]) {
+      const p = probes.find((x) => x.status === st);
+      assert.ok(p, `应存在 ${st} 探针`);
+      assert.equal(p.citation, undefined, `${st} 不得产出引用记录`);
+    }
+    // 正常探针不受影响
+    const ok = probes.find((x) => x.status === "MENTIONED");
+    assert.equal(ok?.citation?.citationsStatus, "ok");
+    assert.equal(ok?.citation?.citations.length, 1);
+  });
 });

@@ -38,7 +38,14 @@ import { evidenceEnabled, evidenceFromFetch } from "./evidence/store";
 import { createStore, type Store } from "./store";
 import { recordAiObservation } from "./observers/ai";
 
-const AI_TIMEOUT_MS = 30_000;
+/**
+ * 单次调用的超时上限。可通过 GEOKIT_AI_TIMEOUT_MS 覆盖（T2：超时可配置），
+ * 默认保守值 30s —— 九家厂商的响应速度差异大，统一上限避免个别慢厂商拖垮整批。
+ */
+const AI_TIMEOUT_MS = (() => {
+  const v = Number(process.env.GEOKIT_AI_TIMEOUT_MS);
+  return Number.isFinite(v) && v > 0 ? v : 30_000;
+})();
 
 export type ProviderId =
   | "deepseek"
@@ -452,6 +459,12 @@ async function recordLlmEvidence(
  */
 export interface ProbeContext {
   store?: Store;
+  /**
+   * 竞品清单（调用方传入，选填）。只用于在答案文本里做大小写不敏感的
+   * 包含匹配，产出 CitationRecord.competitorsMentioned —— 不参与判定、
+   * 不改 prompt，不传时为空数组（T2：竞品列表由用户传入）。
+   */
+  competitors?: string[];
 }
 
 /**
@@ -471,7 +484,7 @@ export async function probeProvider(
 ): Promise<VisibilityProbe> {
   /** 本次调用是否留下了 Evidence —— 由内层赋值，外层据此决定是否产出结论 */
   const sink: { record: AiEvidenceRecord | null } = { record: null };
-  const probe = await runProbe(provider, brand, topic, apiKey, ctx?.store, sink);
+  const probe = await runProbe(provider, brand, topic, apiKey, ctx?.store, sink, ctx?.competitors ?? []);
 
   const store = sink.record?.store ?? ctx?.store;
   if (store && (sink.record || probe.evidenceId)) {
@@ -495,7 +508,8 @@ async function runProbe(
   topic: string,
   apiKey: string | undefined,
   sharedStore: Store | undefined,
-  sink: { record: AiEvidenceRecord | null }
+  sink: { record: AiEvidenceRecord | null },
+  competitors: string[] = []
 ): Promise<VisibilityProbe> {
   const started = Date.now();
   const prompt = buildPrompt(brand, topic);
@@ -613,6 +627,7 @@ async function runProbe(
     brand,
     topic,
     elapsedMs,
+    competitors,
   });
 }
 
@@ -644,8 +659,9 @@ function buildObservedProbe(args: {
   brand: string;
   topic: string;
   elapsedMs: number;
+  competitors: string[];
 }): VisibilityProbe {
-  const { base, text, servedModel, evidenceId, brand, topic, elapsedMs } = args;
+  const { base, text, servedModel, evidenceId, brand, topic, elapsedMs, competitors } = args;
 
   // ── 第六态：INDETERMINATE（Phase 1 S5 落地）───────────────────
   // 拿到的是可解析的回答，但它不足以支撑「有没有提到」这个判断。
@@ -663,7 +679,7 @@ function buildObservedProbe(args: {
       rawResponse: text,
       citedDomains: extractDomains(text),
       // 拒答文本里通常没有链接 → citationsStatus=unavailable，原因随记录走
-      citation: extractCitations(text, topic, base.providerName, false, brand),
+      citation: extractCitations(text, topic, base.providerName, false, brand, competitors),
       servedModel,
       evidenceId,
       confidence: "unavailable",
@@ -683,7 +699,7 @@ function buildObservedProbe(args: {
     rawResponse: text,
     citedDomains: extractDomains(text),
     // T2：引用情报。URL 只来自响应文本里真实存在的链接，模型没给就是 unavailable
-    citation: extractCitations(text, topic, base.providerName, mentioned, brand),
+    citation: extractCitations(text, topic, base.providerName, mentioned, brand, competitors),
     servedModel,
     evidenceId,
     confidence: "medium",
@@ -848,13 +864,14 @@ function extractDomains(text: string): string[] {
 export async function runVisibilityMatrix(
   brand: string,
   topic: string,
-  keys: Partial<Record<ProviderId, string>> = {}
+  keys: Partial<Record<ProviderId, string>> = {},
+  competitors: string[] = []
 ): Promise<VisibilityReport> {
   // 九个探针**共享一个 Store**：Observation 是全量重写式追加，
   // 各自建实例会互相覆盖。详见 ProbeContext 的注释。
   const store = evidenceEnabled() ? createStore() : undefined;
   const probes = await Promise.all(
-    PROVIDER_LIST.map((p) => probeProvider(p, brand, topic, keys[p.id], store ? { store } : undefined))
+    PROVIDER_LIST.map((p) => probeProvider(p, brand, topic, keys[p.id], store ? { store, competitors } : { competitors }))
   );
   return buildVisibilityReport(brand, topic, probes);
 }
