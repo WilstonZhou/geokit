@@ -28,6 +28,14 @@ import { checkUrl, checkHtml, autoFixHtml } from "./services/diagnosis";
 import { listObservationHistory, latestObservationDiff } from "./services/observations";
 import { diffObservations } from "./diff";
 import type { Observation, CitationRecord } from "./evidence/types";
+import {
+  generateOpportunities,
+  verifyOpportunity,
+  countByType,
+  type Opportunity,
+  type OpportunityInput,
+  type OpportunityResolution,
+} from "./opportunity";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
@@ -355,6 +363,70 @@ export const TOOLS: ToolDef[] = [
         limit: { type: "number", description: "返回条数限制（1..500，默认 50）" },
         latest: { type: "boolean", description: "是否每个 identity 只留最新一条（当前状态视图）" },
       },
+    },
+  },
+  {
+    name: "list_opportunities",
+    title: "机会引擎：列出可执行的下一步建议",
+    description:
+      "把各 T（T2 引用聚合 / T4 站点问题 / T5 GSC / 协议层 / 页面审计）的发现统一翻译成 Opportunity 列表。" +
+      "每个机会带 impact/effort、可追溯 evidence、清单式建议与复检信号；同 target 上多条建议自动合并。" +
+      "输入字段全部可选 —— 缺哪段就跳过对应机会类型，绝不报错（例如无 GSC 数据时不会输出 search-opportunity）。" +
+      "不调用任何大模型，建议全部来自规则与模板。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        siteAnalysis: {
+          type: "object",
+          description: "T4 站点级问题聚合（analyzeSiteIssues 的返回值）",
+        },
+        citationAggregation: {
+          type: "object",
+          description: "T2 引用聚合（analyzeCitations 的返回值）",
+        },
+        userDomain: { type: "string", description: "用户域名，citation-gap 与 target 计算用" },
+        robotsAnalysis: {
+          type: "object",
+          description: "robots.txt 的 AI 策略分析结果（analyzeRobots 的返回值）",
+        },
+        llmsTxtAnalysis: {
+          type: "object",
+          description: "llms.txt 校验结果（analyzeLlmsTxt 的返回值）",
+        },
+        gscOpportunities: {
+          type: "array",
+          description: "T5 GSC 机会（analyzeSearchOpportunities 返回的 opportunities 字段）",
+        },
+        pageAudits: {
+          type: "array",
+          description: "页面审计结果（auditUrl 的返回值列表），用于 missing-entity",
+        },
+      },
+    },
+  },
+  {
+    name: "verify_opportunity",
+    title: "机会引擎：基于两次观测判断机会是否已解决",
+    description:
+      "对一个机会执行复检判定：基于 verification.signalKey 与 direction，比对前后两次相关观测。" +
+      "返回 resolved / unchanged / worsened / unknown。找不到可比观测时返回 unknown，绝不编造判定。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        opportunity: {
+          type: "object",
+          description: "待验证的机会（list_opportunities 返回的 Opportunity 之一）",
+        },
+        prevObservations: {
+          type: "array",
+          description: "上一次相关观测列表（按 subject 包含 opportunity.target 匹配）",
+        },
+        currObservations: {
+          type: "array",
+          description: "本次相关观测列表",
+        },
+      },
+      required: ["opportunity", "prevObservations", "currObservations"],
     },
   },
 ];
@@ -818,6 +890,67 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       const r = await listObservationHistory(sp);
       if (!r.ok) throw new Error(r.error);
       return r.data;
+    }
+
+    case "list_opportunities": {
+      // 把 MCP 入参里的可选字段透传给引擎；缺哪段引擎会跳过对应机会类型
+      const input: OpportunityInput = {};
+      if (args.siteAnalysis && typeof args.siteAnalysis === "object") {
+        input.siteAnalysis = args.siteAnalysis as OpportunityInput["siteAnalysis"];
+      }
+      if (args.citationAggregation && typeof args.citationAggregation === "object") {
+        input.citationAggregation = args.citationAggregation as OpportunityInput["citationAggregation"];
+      }
+      if (typeof args.userDomain === "string" && args.userDomain.trim()) {
+        input.userDomain = String(args.userDomain).trim();
+      }
+      if (args.robotsAnalysis && typeof args.robotsAnalysis === "object") {
+        input.robotsAnalysis = args.robotsAnalysis as OpportunityInput["robotsAnalysis"];
+      }
+      if (args.llmsTxtAnalysis && typeof args.llmsTxtAnalysis === "object") {
+        input.llmsTxtAnalysis = args.llmsTxtAnalysis as OpportunityInput["llmsTxtAnalysis"];
+      }
+      if (Array.isArray(args.gscOpportunities)) {
+        input.gscOpportunities = args.gscOpportunities as OpportunityInput["gscOpportunities"];
+      }
+      if (Array.isArray(args.pageAudits)) {
+        input.pageAudits = args.pageAudits as OpportunityInput["pageAudits"];
+      }
+
+      const opportunities = generateOpportunities(input);
+      const counts = countByType(opportunities);
+      return {
+        total: opportunities.length,
+        counts,
+        opportunities,
+        note:
+          "每个机会的 diagnosis.evidence 必须可追溯；缺哪段输入就跳过对应类型，绝不报错。" +
+          "建议来自规则与模板，不调用任何大模型。",
+      };
+    }
+
+    case "verify_opportunity": {
+      if (!args.opportunity || typeof args.opportunity !== "object") {
+        throw new Error("verify_opportunity 需要 opportunity 对象");
+      }
+      if (!Array.isArray(args.prevObservations) || !Array.isArray(args.currObservations)) {
+        throw new Error("verify_opportunity 需要 prevObservations 与 currObservations 数组");
+      }
+      const op = args.opportunity as Opportunity;
+      const prev = args.prevObservations as Observation[];
+      const curr = args.currObservations as Observation[];
+      const resolution: OpportunityResolution = verifyOpportunity(op, prev, curr);
+      return {
+        opportunityId: op.id,
+        target: op.target,
+        type: op.type,
+        verification: op.verification,
+        resolution,
+        note:
+          resolution === "unknown"
+            ? "未找到可比的前后观测，无法判定。"
+            : `复检结论：${resolution}`,
+      };
     }
 
     default:

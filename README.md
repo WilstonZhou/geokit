@@ -339,6 +339,49 @@ service account 必须在对应 Search Console 资源里被添加为用户（资
 - MCP 工具：`get_search_performance`、`analyze_search_opportunities`；
 - 页面：`/gsc`（凭证缺失时直接展示三种配置方式）。
 
+## 机会引擎（Opportunity Engine）
+
+把"发现了一个个独立问题"升级为"告诉用户下一步做什么"。引擎只做三件事：
+调六个生成器把发现翻译成 Opportunity 列表 → 按 impact×effort 排序 → 同 target 上多条机会合并为一条多建议。
+
+**Opportunity 类型**（`src/lib/opportunity/types.ts`）：
+- `id` / `type` / `target`（URL / query / 域名）
+- `impact`（high/medium/low）与 `effort`（high/medium/low），规则透明可读
+- `diagnosis`：必须可追溯 evidence，无 evidence 的机会不输出
+- `recommendations`：清单式建议，不含自动改动
+- `sources`：该机会来自哪些 Observation（id 列表）
+- `verification`：下次复检应观察到的信号变化（signalKey + direction + 描述）
+
+**六种机会类型**（每种都有触发/不触发测试）：
+
+| 类型 | 触发条件 | 来源 |
+|---|---|---|
+| `weak-citeability` | GeoSummary.lowestScoring 含 geoScore<60 的 URL | T4 |
+| `citation-gap` | CitationAggregation.citationGap 非空（域名被 AI 引用≥2 次且非用户域名） | T2 |
+| `ai-crawl-protocol` | robots.txt 屏蔽 AI 爬虫 / llms.txt 不存在 | 协议层 |
+| `site-issue-high` | T4 issues 中 severity="high" 的问题 | T4 |
+| `search-opportunity` | T5 GscOpportunity[] 非空（缺省跳过不报错） | T5（可选） |
+| `missing-entity` | 页面审计检测出缺 Schema/作者/组织/发布时间 | audit.ts |
+
+**排序规则**（`src/lib/opportunity/engine.ts`，常量透明）：
+1. 按 impact（high→medium→low）；
+2. 同 impact 下按 effort（low→medium→high）—— 越易做越前；
+3. 同分按 affectedScope（受影响范围）降序。
+
+**合并规则**：同 target 的多条机会合并为一条多建议。合并后 impact=最高、effort=最低、
+recommendations 聚合、evidence 聚合（去重）、verification 取主机会的。
+
+**验证闭环**（`src/lib/opportunity/verify.ts`）：基于两次观测对比，按 direction 判定
+`resolved / unchanged / worsened / unknown`。找不到可比观测返回 `unknown`，绝不编造判定。
+
+**铁律**：
+- 没有证据不输出 —— `diagnosis.evidence` 必须非空；
+- 不调任何大模型 —— 建议全部来自规则与模板；
+- 输入字段全可选 —— 缺哪段就跳过对应机会类型，绝不报错。
+
+- MCP 工具：`list_opportunities`、`verify_opportunity`；
+- 页面：`/opportunities`（粘贴 OpportunityInput JSON 即可生成）。
+
 ## 命令行与 CI 门禁（CLI）
 
 GEOkit 提供独立于 Web 服务的轻量级 CLI 工具（冷启动、确定性退出码、支持 GitHub Code Scanning SARIF 格式）：

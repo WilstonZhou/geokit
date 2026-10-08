@@ -13,6 +13,41 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
+## [Phase 2 T6] — 2026-10-08 · Opportunity Engine（机会引擎）
+
+> 把"发现了一个个独立问题"升级为"告诉用户下一步做什么"。依赖 T2 / T4，可选依赖 T5。
+
+### 核心变更
+
+1. **新增 `src/lib/opportunity/` 模块**：
+   - `types.ts`：`Opportunity`（id/type/target/impact/effort/diagnosis/recommendations/sources/verification/affectedScope）+ 6 种 `OpportunityType` + `ImpactLevel` / `EffortLevel` / `Recommendation` / `OpportunityEvidenceRef` / `Verification` / `OpportunityResolution` / `OpportunityInput`。
+   - `generators.ts`：6 个纯函数生成器（`genWeakCiteability` / `genCitationGap` / `genAiCrawlProtocol` / `genSiteIssueHigh` / `genSearchOpportunity` / `genMissingEntity`）。每个机会必须可追溯 evidence，否则不输出。
+   - `engine.ts`：`generateOpportunities(input)` 主入口 + `rankOpportunities`（按 IMPACT_RANK→EFFORT_RANK→affectedScope 排序，常量透明）+ `mergeByTarget`（同 target 多条合并为一条多建议，impact 取最高 / effort 取最低 / recommendations 与 evidence 聚合去重）+ `countByType`。
+   - `verify.ts`：`verifyOpportunity(op, prevObs, currObs)` 基于 `verification.signalKey + direction` 判定 `resolved / unchanged / worsened / unknown`，找不到可比观测返回 `unknown` 不编造。`verifyOpportunities` 批量版本。
+   - `index.ts`：编排入口与全部导出。
+2. **六种机会类型触发条件**（每种都有命中 / 不命中 / 降级测试）：
+   - `weak-citeability`：T4 `GeoSummary.lowestScoring` 含 geoScore<60 的 URL（critical<40 → high impact；40–59 → medium）。
+   - `citation-gap`：T2 `CitationAggregation.citationGap` 非空，按 count≥5/3/2 分 high/medium/low impact；缺 `userDomain` 不输出。
+   - `ai-crawl-protocol`：robots 屏蔽 AI 爬虫（high impact）或 llms.txt 不存在（medium impact），二者同 target 自动合并。
+   - `site-issue-high`：T4 issues 中 severity="high" 的问题；target=affectedUrls[0]、affectedScope=affectedUrls.length。
+   - `search-opportunity`：T5 GscOpportunity[] 非空；undefined 或空数组跳过不报错（任务要求的"优雅降级"）。
+   - `missing-entity`：pageAudits 中检测缺 Schema（jsonLdTypes 空）/ 作者（og:article:author）/ 组织（og:site_name）/ 发布时间（article:published_time），按缺失项数合并建议。
+3. **MCP（16→18）**：`list_opportunities`（接受 `OpportunityInput` 全可选字段，缺哪段跳过哪类，返回 total/counts/opportunities）、`verify_opportunity`（接受 opportunity + prevObservations + currObservations，返回 resolution + verification 信号）。`tests/integration/mcp.test.ts` 工具数断言 16→18。
+4. **页面/API**：新增 `/api/opportunities`（POST 接受 OpportunityInput JSON，过滤未知键，30s 超时）与 `/opportunities` 页面（汇总 Stat×6 + 机会列表带 impact/effort/diagnosis/evidence/recommendations/verification/sources）；首页加"机会引擎"导航卡片（CAPABILITIES 5→6 项，"五项核心能力" → "六项"）。
+5. **测试**：`tests/unit/opportunity.test.ts`（38 项）覆盖每个生成器命中/不命中/降级、引擎合并/排序/降级、铁律"无 evidence 不输出"、verifyOpportunity 的 increase/decrease/appear/disappear/unknown 各方向、rankOpportunities 三层 tie-breaker。
+
+### 验证
+
+- `npm run typecheck` 通过；`npm test` 全量通过（+38）；`npm run build` 成功（新增 `/opportunities`、`/api/opportunities`）。
+
+### 已知限制 / 待办（建议）
+
+- `verification.signalKey` 当前按字段名直查 `Observation.result`，不支持深层路径；复杂信号需在 Observation 落库时扁平化字段名。
+- `mergeByTarget` 跨类型合并时 `verification` 取主机会的，未做信号融合 —— 跨类型合并的复检结论仅供参考，详细复检应回到原始机会粒度。
+- `/opportunities` 页面需手动粘贴 JSON 输入；串联"先跑 T4/T2/T5 再自动喂给机会引擎"的 UI 暂未实现（可作为后续体验增强）。
+
+---
+
 ## [Phase 2] 元修复 — 2026-10-08 · engines 声明与方案外范围澄清
 
 > 经用户审阅发现的两项修正：(1) `engines.node` 与 `node:sqlite` 静态导入实际需求不符；(2) `apply_fixes` / `diagnose_page` / CLI / SARIF 超出 T0–T13 主线任务书，需明确范围归属。

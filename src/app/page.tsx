@@ -65,6 +65,13 @@ const CAPABILITIES = [
     href: "/gsc",
     highlight: "真实搜索数据（可选）",
   },
+  {
+    icon: "★",
+    title: "机会引擎",
+    desc: "把各 T 的发现统一翻译成「下一步做什么」：可引用性弱、引用缺口、AI 抓取协议、高影响项、搜索机会、实体缺失。带 impact/effort、可追溯 evidence、复检信号。",
+    href: "/opportunities",
+    highlight: "规则模板，不调 LLM",
+  },
 ];
 
 export default function Home() {
@@ -112,7 +119,7 @@ export default function Home() {
       {/* 四个能力 */}
       <section>
         <SectionTitle
-          title="五项核心能力"
+          title="六项核心能力"
           desc="每一项都针对实测出的 open-seo 空白区，而不是为了差异化而差异化。"
         />
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
