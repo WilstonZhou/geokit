@@ -25,6 +25,7 @@ const TYPE_META: Record<
   "search-opportunity": { label: "搜索机会", tone: "info" },
   "missing-entity": { label: "实体缺失", tone: "warn" },
   "schema-issue": { label: "Schema 问题", tone: "bad" },
+  "poor-web-vitals": { label: "性能差", tone: "bad" },
 };
 
 const IMPACT_TONE: Record<string, "bad" | "warn" | "neutral"> = {

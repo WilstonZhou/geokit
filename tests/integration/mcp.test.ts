@@ -24,7 +24,7 @@ async function callMcpTool(name: string, args: Record<string, unknown> = {}) {
 }
 
 describe("MCP Server Integration Tests", () => {
-  it("tools/list lists all 20 registered tools", async () => {
+  it("tools/list lists all 24 registered tools", async () => {
     const listRes = (await handleJsonRpc({
       jsonrpc: "2.0",
       id: "init",
@@ -34,7 +34,7 @@ describe("MCP Server Integration Tests", () => {
     const tools = listRes.result.tools;
     const names = tools.map((t) => t.name);
 
-    assert.strictEqual(tools.length, 23);
+    assert.strictEqual(tools.length, 24);
     assert.ok(names.includes("list_engines"));
     assert.ok(names.includes("check_serp_ranking"));
     assert.ok(names.includes("audit_page"));
@@ -55,6 +55,9 @@ describe("MCP Server Integration Tests", () => {
     assert.ok(names.includes("verify_opportunity"));
     assert.ok(names.includes("analyze_query"));
     assert.ok(names.includes("cluster_queries"));
+    assert.ok(names.includes("analyze_schema"));
+    assert.ok(names.includes("generate_schema_draft"));
+    assert.ok(names.includes("check_web_vitals"));
     // query_history 是 list_observations 的向后兼容别名,不在 tools/list 重复列出
     assert.ok(!names.includes("query_history"));
   });

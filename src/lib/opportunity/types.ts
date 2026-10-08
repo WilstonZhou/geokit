@@ -14,7 +14,7 @@
 /* ------------------------------------------------------------------ */
 
 /**
- * 七种机会类型，每一种都有明确的触发条件与测试。
+ * 八种机会类型，每一种都有明确的触发条件与测试。
  *
  * - weak-citeability    GEO 低分维度 + 缺失信号 → 该页对 AI 不够可引用
  * - citation-gap        AI 频繁引用某域名，用户域名缺席（来自 T2）
@@ -23,6 +23,7 @@
  * - search-opportunity  T5 GSC 机会，有则启用，无则跳过不报错
  * - missing-entity      作者/组织/发布时间/Schema 缺失
  * - schema-issue        T10 Schema 字段缺失/不完整、与可见内容不一致（T10）
+ * - poor-web-vitals     T11 CrUX 真实用户性能指标为 poor（LCP/INP/CLS/FCP/TTFB）
  */
 export const OPPORTUNITY_TYPES = [
   "weak-citeability",
@@ -32,6 +33,7 @@ export const OPPORTUNITY_TYPES = [
   "search-opportunity",
   "missing-entity",
   "schema-issue",
+  "poor-web-vitals",
 ] as const;
 
 export type OpportunityType = (typeof OPPORTUNITY_TYPES)[number];
@@ -150,6 +152,7 @@ import type { RobotsAnalysis, LlmsTxtAnalysis } from "../llms";
 import type { GscOpportunity } from "../gsc/types";
 import type { PageAudit } from "../audit";
 import type { SchemaDiagnosis } from "../schema/types";
+import type { CruxObservation } from "../crux/types";
 
 /**
  * 引擎输入 —— 全部可选，缺哪段就跳过对应机会类型，绝不报错。
@@ -174,4 +177,6 @@ export interface OpportunityInput {
   pageAudits?: PageAudit[];
   /** T10 Schema 诊断 —— schema-issue 用，可选 */
   schemaDiagnoses?: SchemaDiagnosis[];
+  /** T11 CrUX 性能观测 —— poor-web-vitals 用，可选 */
+  cruxObservations?: CruxObservation[];
 }

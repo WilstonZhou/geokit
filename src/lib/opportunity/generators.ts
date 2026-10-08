@@ -25,6 +25,8 @@ import type { RobotsAnalysis, LlmsTxtAnalysis } from "../llms";
 import type { GscOpportunity } from "../gsc/types";
 import type { PageAudit } from "../audit";
 import type { SchemaDiagnosis } from "../schema/types";
+import type { CruxObservation } from "../crux/types";
+import { METRIC_LABELS } from "../crux/types";
 import { getDomain } from "../html";
 
 /* ------------------------------------------------------------------ */
@@ -623,4 +625,109 @@ export function genSchemaIssue(
   }
 
   return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* 8. poor-web-vitals —— T11 CrUX 真实用户性能指标为 poor                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 触发条件：CruxObservation 中存在任一指标 category === "poor"。
+ * 每条 URL 产生一条机会；影响范围 = poor 指标数。
+ * 只观测不自动改；建议为规则模板（优化 LCP/INP/CLS 等）。
+ */
+export function genPoorWebVitals(
+  observations: CruxObservation[] | undefined
+): Opportunity[] {
+  if (!observations || observations.length === 0) return [];
+  const out: Opportunity[] = [];
+
+  for (const obs of observations) {
+    if (obs.status !== "ok" || !obs.metrics || obs.metrics.length === 0) continue;
+
+    const poorMetrics = obs.metrics.filter((m) => m.category === "poor");
+    const niMetrics = obs.metrics.filter((m) => m.category === "needs-improvement");
+
+    // 无任何问题 → 不输出（没证据不输出）
+    if (poorMetrics.length === 0 && niMetrics.length === 0) continue;
+
+    const target = obs.target;
+    const impact: ImpactLevel = poorMetrics.length > 0 ? "high" : "medium";
+
+    const evidence: OpportunityEvidenceRef[] = [];
+    for (const m of poorMetrics) {
+      evidence.push({
+        signal: `crux.${m.metric}.p75`,
+        value: m.p75,
+      });
+    }
+    for (const m of niMetrics.slice(0, 3)) {
+      evidence.push({
+        signal: `crux.${m.metric}.p75`,
+        value: m.p75,
+      });
+    }
+    evidence.push({
+      signal: "crux.overallCategory",
+      value: obs.overallCategory ?? "NONE",
+    });
+
+    const recommendations: Recommendation[] = [];
+    for (const m of poorMetrics) {
+      const label = METRIC_LABELS[m.metric] ?? m.metric;
+      recommendations.push({
+        action: `优化 ${label}（当前 p75=${m.p75}，超过 poor 阈值 ${m.niThreshold}）`,
+        detail: getMetricOptimizationHint(m.metric),
+      });
+    }
+    if (niMetrics.length > 0 && poorMetrics.length === 0) {
+      recommendations.push({
+        action: `改善 ${niMetrics.map((m) => METRIC_LABELS[m.metric] ?? m.metric).join("、")}`,
+        detail: "当前处于 needs-improvement 区间，建议优化至 good 阈值以内",
+      });
+    }
+
+    out.push({
+      id: makeOpportunityId("poor-web-vitals", target),
+      type: "poor-web-vitals",
+      target,
+      impact,
+      effort: "medium",
+      diagnosis: {
+        summary:
+          poorMetrics.length > 0
+            ? `该页 ${poorMetrics.length} 项 Web Vitals 指标为 poor（${poorMetrics.map((m) => METRIC_LABELS[m.metric]).join("、")}）`
+            : `该页 ${niMetrics.length} 项 Web Vitals 指标处于 needs-improvement 区间`,
+        evidence,
+      },
+      recommendations,
+      sources: [],
+      verification: {
+        signalKey: "crux.overallCategory",
+        direction: "increase",
+        description: `下次复检时该 URL 的 CrUX overallCategory 应提升（当前 ${obs.overallCategory}）`,
+      },
+      affectedScope: poorMetrics.length + niMetrics.length,
+    });
+  }
+
+  return out;
+}
+
+/** 规则模板：各指标优化建议（不调 LLM，可复现） */
+function getMetricOptimizationHint(metric: string): string {
+  switch (metric) {
+    case "largest_contentful_paint":
+      return "优化图片/字体加载、减少渲染阻塞资源、使用 CDN、服务端渲染";
+    case "interaction_to_next_paint":
+      return "减少 JavaScript 执行时间、拆分长任务、优化事件处理程序";
+    case "cumulative_layout_shift":
+      return "为图片/视频设置尺寸属性、避免动态插入内容、使用 CSS transform 动画";
+    case "first_contentful_paint":
+      return "减少服务器响应时间、预加载关键资源、减少阻塞渲染的 CSS/JS";
+    case "experimental_time_to_first_byte":
+      return "优化服务器响应、使用 CDN、启用缓存、减少重定向";
+    default:
+      return "参考 web.dev 优化指南";
+  }
 }

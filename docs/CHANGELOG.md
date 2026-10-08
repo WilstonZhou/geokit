@@ -13,6 +13,56 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
+## [Phase 2 T11] — 2026-10-09 · Core Web Vitals / CrUX 性能观测
+
+> 接入 Chrome UX Report API，观测真实用户性能指标（LCP/INP/CLS/FCP/TTFB），差指标自动进入 Opportunity Engine。只观测、不修改站点。结论作为第 8 类机会 `poor-web-vitals` 进入 Opportunity Engine。
+
+### 核心变更
+
+**新增文件（5 个）**：
+- `src/lib/crux/types.ts` — CruxMetricName（5 项指标蛇形名）、CruxFormFactor、CruxHistogramBin、MetricEvaluation、CruxObservation、BatchCheckInput/Result、CWV_THRESHOLDS（官方阈值）、METRIC_LABELS
+- `src/lib/crux/client.ts` — CrUX API 客户端（POST queryRecord），状态映射：无 key→unavailable、404→unavailable、429→blocked、401/403→blocked、其他→error；串行批量 + 可配 minIntervalMs，遇 429 截断
+- `src/lib/crux/analyze.ts` — 纯函数指标评估：p75 与阈值对比 → good/ni/poor；histogram 密度计算；整体评级（任一 poor → SLOW）
+- `src/lib/crux/observe.ts` — Observation(kind="performance") 构建与落库（受 GEOKIT_EVIDENCE 总闸控制），evidenceRefs 留空、结论粒度入 result/extractedEvidence
+- `tests/unit/crux.test.ts` — 23 个用例（评估/观测/客户端/批量/机会生成）
+
+**修改文件（5 个）**：
+- `src/lib/opportunity/types.ts` — OPPORTUNITY_TYPES 7→8（+`poor-web-vitals`）；OpportunityInput +可选 `cruxObservations?`
+- `src/lib/opportunity/generators.ts` — 新增 `genPoorWebVitals`（poor=high、ni=medium；evidence 含 crux.{metric}.p75 与 overallCategory；规则模板建议不调 LLM）
+- `src/lib/opportunity/engine.ts` — 接入第 8 生成器；countByType +1
+- `src/lib/evidence/types.ts` — ObservationKind +`performance`
+- `src/lib/mcp.ts` — +1 工具 `check_web_vitals`（urls[]/origins[]/formFactor/concurrency/minIntervalMs），23→24；落库受 GEOKIT_EVIDENCE 控制
+- `src/app/opportunities/page.tsx` — TYPE_META +poor-web-vitals 映射
+- `README.md` — MCP badge 23→24、工具清单 23→24、新增「性能观测」分组、环境变量 +CRUX_API_KEY
+- `tests/integration/mcp.test.ts` — 工具计数 23→24，新增 check_web_vitals 断言
+
+### 设计原则
+
+1. **只调 CrUX API，不调 PSI**：PSI 官方已声明计划剥离内嵌 CrUX，独立 CrUX API 是推荐路径；实现前已查阅官方文档确认字段名与配额（150 QPM）。
+2. **无 key 优雅降级**：未配置 `CRUX_API_KEY` → unavailable；无数据 → unavailable；限流 → blocked 并截断批量。
+3. **零编造**：不返回估算值；CrUX 无数据时如实说「chrome ux report data not found」。
+4. **速率限制透明**：官方 150 次/分钟/项目；客户端串行 + 默认 500ms 间隔，429 立即截断并返回已观测结果。
+5. **规则模板建议**：机会生成不调 LLM，建议来自规则模板（优化 LCP/INP/CLS 等），可复现。
+
+### 验收对照
+
+- ✅ 假响应覆盖：正常（200）、无 CrUX 数据（404）、429 速率限制、API 错误（500/网络异常）
+- ✅ 无 API key 时返回 unavailable 并说明原因
+- ✅ 差指标（poor/ni）自动生成 poor-web-vitals 机会进入 Opportunity Engine
+- ✅ 批量 urls[] 支持，串行 + 间隔，遇 429 截断
+- ✅ Observation(kind="performance") 落库，支持 diff（通过 list_observations / diff_observations）
+
+### 验证
+
+- typecheck ✅ · lint ✅ · test ✅（426/426，+23 新增）· build ✅
+- MCP 工具数 23→24，零新增依赖
+
+### 已知限制 / 待办
+
+- 并发参数 concurrency 当前未实现真并发（串行 + 间隔已满足 150 QPM 限制），后续如需更高吞吐可引入信号量。
+- CrUX 数据为 28 天滚动窗口采样，非实时；趋势分析需结合多次观测 diff。
+- 未提供 /vitals 页面（当前仅 MCP 工具 + Opportunity Engine 联动），后续如需可视化可补充。
+
 ## [Phase 2 T10] — 2026-10-08 · Schema / 实体诊断与零编造 JSON-LD 草稿
 
 > 规则驱动检测 7 类页面，校验 Schema 字段完整性与 JSON-LD↔页面一致性，输出可复制的零编造草稿。只诊断、不修改站点。结论作为第 7 类机会 `schema-issue` 进入 Opportunity Engine。

@@ -52,6 +52,8 @@ import {
   analyzeSchemaUrl,
   buildSchemaDraft,
 } from "./schema";
+import { batchQueryCruxRaw, analyzeCruxBatch, recordCruxObservation } from "./crux";
+import { createStore } from "./store";
 
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
@@ -567,6 +569,30 @@ export const TOOLS: ToolDef[] = [
       properties: {
         url: { type: "string", description: "目标页面 URL（未传 html 时必填）" },
         html: { type: "string", description: "页面 HTML 原文，离线分析时传入（优先级高于 url）" },
+      },
+    },
+  },
+  {
+    name: "check_web_vitals",
+    title: "Web Vitals 性能观测",
+    description:
+      "通过 Chrome UX Report (CrUX) API 查询真实用户性能数据（LCP/INP/CLS/FCP/TTFB）。" +
+      "需要配置 CRUX_API_KEY 环境变量；无 key / 未启用 API → unavailable，不返回估算值。" +
+      "支持批量 urls[]（串行 + 间隔，遵守官方 150 QPM 限制，遇 429 截断）。" +
+      "差指标（poor / needs-improvement）自动生成 poor-web-vitals 机会进入 Opportunity Engine。" +
+      "数据为 28 天滚动窗口的真实用户采样，非实验室单次测量。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        urls: { type: "array", items: { type: "string" }, description: "页面 URL 列表（与 origins 二选一）" },
+        origins: { type: "array", items: { type: "string" }, description: "源站 origin 列表（与 urls 二选一）" },
+        formFactor: {
+          type: "string",
+          enum: ["DESKTOP", "PHONE", "TABLET"],
+          description: "设备类型（可选，缺省聚合全部）",
+        },
+        concurrency: { type: "number", description: "并发上限（默认 2，遵守官方 150 QPM 限制）" },
+        minIntervalMs: { type: "number", description: "同 host 最小请求间隔 ms（默认 500）" },
       },
     },
   },
@@ -1221,6 +1247,60 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
         };
       }
       return name === "analyze_schema" ? r.diagnosis : r.draft;
+    }
+
+    case "check_web_vitals": {
+      const urls = Array.isArray(args.urls) ? args.urls.filter((u): u is string => typeof u === "string") : [];
+      const origins = Array.isArray(args.origins) ? args.origins.filter((o): o is string => typeof o === "string") : [];
+      const formFactor = args.formFactor === "DESKTOP" || args.formFactor === "PHONE" || args.formFactor === "TABLET"
+        ? args.formFactor
+        : undefined;
+
+      if (urls.length === 0 && origins.length === 0) {
+        throw new Error("urls 与 origins 至少提供一个");
+      }
+
+      const input = {
+        urls: urls.length > 0 ? urls : undefined,
+        origins: origins.length > 0 ? origins : undefined,
+        formFactor,
+        concurrency: typeof args.concurrency === "number" ? args.concurrency : undefined,
+        minIntervalMs: typeof args.minIntervalMs === "number" ? args.minIntervalMs : undefined,
+      } as const;
+
+      // 采集
+      const { rawObservations, truncated, truncatedReason } = await batchQueryCruxRaw(input);
+
+      // 分析
+      const observations = analyzeCruxBatch(rawObservations);
+
+      // 落库（受 GEOKIT_EVIDENCE 总闸控制）
+      if (process.env.GEOKIT_EVIDENCE === "on") {
+        const store = createStore();
+        for (const obs of observations) {
+          await recordCruxObservation(store, obs);
+        }
+      }
+
+      const ok = observations.filter((o) => o.status === "ok").length;
+      const unavailable = observations.filter((o) => o.status === "unavailable").length;
+      const blocked = observations.filter((o) => o.status === "blocked").length;
+      const error = observations.filter((o) => o.status === "error").length;
+
+      return {
+        total: observations.length,
+        ok,
+        unavailable,
+        blocked,
+        error,
+        truncated,
+        truncatedReason,
+        observations,
+        note:
+          "CrUX 数据为 Chrome 真实用户采样（28 天滚动窗口）；" +
+          "无数据时返回 unavailable，不返回估算值；" +
+          "差指标已生成 poor-web-vitals 机会（调用 list_opportunities 查看）。",
+      };
     }
 
     default:

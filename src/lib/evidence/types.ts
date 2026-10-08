@@ -294,7 +294,8 @@ export type ObservationKind =
   | "crawl"
   | "gsc"
   | "robots"
-  | "llms";
+  | "llms"
+  | "performance";
 
 export type Confidence = "high" | "medium" | "low" | "unavailable";
 

@@ -26,6 +26,7 @@ import {
   genSearchOpportunity,
   genMissingEntity,
   genSchemaIssue,
+  genPoorWebVitals,
   makeOpportunityId,
 } from "./generators";
 
@@ -174,6 +175,7 @@ export function generateOpportunities(input: OpportunityInput): Opportunity[] {
     ...genSearchOpportunity(input.gscOpportunities),
     ...genMissingEntity(input.pageAudits),
     ...genSchemaIssue(input.schemaDiagnoses),
+    ...genPoorWebVitals(input.cruxObservations),
   ];
 
   // 铁律：没有 evidence 的机会不输出（生成器本应保证，此处兜底）
@@ -194,6 +196,7 @@ export function countByType(list: Opportunity[]): Record<OpportunityType, number
     "search-opportunity": 0,
     "missing-entity": 0,
     "schema-issue": 0,
+    "poor-web-vitals": 0,
   };
   for (const o of list) counts[o.type]++;
   return counts;

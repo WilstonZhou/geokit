@@ -18,7 +18,7 @@ AIGC:
 ![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)
 ![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
 ![Dependencies](https://img.shields.io/badge/direct%20deps-4-brightgreen)
-![MCP](https://img.shields.io/badge/MCP-23%20tools-blue)
+![MCP](https://img.shields.io/badge/MCP-24%20tools-blue)
 
 **中文优先的 SEO / GEO 工具**：自建百度 / 搜狗 / 360 / 神马 / 头条采集，
 六维 GEO 评分，九个 AI 模型的品牌可见性探测，以及一套 AI 抓取协议层。
@@ -160,13 +160,14 @@ POST http://localhost:3210/api/mcp
 }
 ```
 
-23 个工具：
+24 个工具：
 - 采集与审计：`list_engines`、`check_serp_ranking`、`audit_page`、`check_ai_visibility`、`crawl_site`
 - 诊断与修复：`diagnose_page`（全量诊断与体检）、`apply_fixes`（安全幂等自动修复）
 - 时序与数据：`list_observations`（历史观测查询，兼容别名 `query_history`）、`diff_observations`（时序对比与退化判定）
 - 引用情报：`analyze_ai_citations`（引用来源排行 / 竞品频次 / 引用缺口，附 evidence）
 - 协议与对比：`analyze_robots`、`analyze_llms_txt`、`generate_llms_txt`、`compare_with_openseo`
 - 搜索表现：`get_search_performance`、`analyze_search_opportunities`（GSC，可选凭证）
+- 性能观测：`check_web_vitals`（CrUX 真实用户数据，LCP/INP/CLS/FCP/TTFB）
 - 机会引擎：`list_opportunities`、`verify_opportunity`
 - Query 情报：`analyze_query`、`cluster_queries`
 - 竞品：`compare_competitors`（五维对比）
@@ -176,7 +177,7 @@ POST http://localhost:3210/api/mcp
 
 ## 可选的环境变量
 
-只有「AI 可见性」这个功能需要 API key，其余全部零依赖。写在 `.env.local`：
+只有「AI 可见性」需要 API key，「CrUX 性能观测」可选 API key（无 key 时 unavailable）。写在 `.env.local`：
 
 ```bash
 DEEPSEEK_API_KEY=    # DeepSeek
@@ -188,6 +189,7 @@ YUANBAO_API_KEY=     # 腾讯元宝
 OPENAI_API_KEY=      # ChatGPT
 ANTHROPIC_API_KEY=   # Claude
 GEMINI_API_KEY=      # Gemini
+CRUX_API_KEY=        # Chrome UX Report API（可选，T11 性能观测用）
 ```
 
 ## 一条原则：抓不到就说抓不到
