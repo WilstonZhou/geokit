@@ -283,6 +283,29 @@ crawl_site(site: "example.com", maxPages?: 100, maxDepth?: 3, concurrency?: 2)
 两次爬取的 diff（新增/消失/状态变化的页面）通过 `diffCrawlResults` 纯函数计算，
 匹配键为 URL，输出 `CrawlDiff { added[], removed[], statusChanged[], unchangedCount }`。
 
+### 站点级问题聚合（T4）
+
+爬取结束后自动对结果跑 8 类规则检查（`analyzeSiteIssues` 纯函数，不调模型），
+每个问题都带稳定 `id`、`severity`（high/medium/low）、受影响 URL、`evidence[]`、
+一句话影响说明与修复建议：
+
+1. 重复 title / meta description / H1（给出具体 URL 分组）；
+2. 缺失 title / description / H1 / canonical；
+3. canonical 指向异常（其他域名 / 4xx / 会跳转的 URL）；
+4. 孤岛页、点击深度过深、内链过少；
+5. 跳转链过长、跳转循环、内链坏链（指向 4xx/5xx）；
+6. 结构化数据覆盖率（各 JSON-LD 类型占比 + 长文页缺 Schema）；
+7. GEO 汇总：分数段分布、最低分页面、拖累整站的共性弱维度（同一维度 ≥3 页偏弱）；
+8. 疑似内容重复：正文 5-gram shingle Jaccard ≥ 0.8，结论永远标注「疑似」并给出相似度依据。
+
+severity 阈值是可读常量（`src/lib/crawler/issues.ts` 顶部导出，如
+`DEEP_PAGE_DEPTH`、`LOW_GEO_SCORE_HIGH/MEDIUM`、`DUPLICATE_CONTENT_JACCARD`），
+均有命中/不命中两个方向的单测。问题只对「可索引的 2xx 页面」成立 ——
+4xx/5xx、blocked、noindex 页面不会被误报内容缺失。
+
+- `crawl_site` MCP 输出新增 `issues` / `geoSummary` / `schemaCoverage`（仅新增字段，向后兼容）；
+- `/crawl` 页面可按严重度与类型筛选问题，点击展开查看受影响 URL 与证据。
+
 ## 命令行与 CI 门禁（CLI）
 
 GEOkit 提供独立于 Web 服务的轻量级 CLI 工具（冷启动、确定性退出码、支持 GitHub Code Scanning SARIF 格式）：

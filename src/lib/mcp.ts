@@ -11,7 +11,7 @@
 import { auditUrl } from "./audit";
 import { CN_ENGINES, GLOBAL_ENGINES, ENGINE_LIST, type EngineId } from "./engines";
 import { analyzeRobots, analyzeLlmsTxt, generateLlmsTxtDraft } from "./llms";
-import { crawlSite } from "./crawler";
+import { crawlSite, analyzeSiteIssues } from "./crawler";
 /**
  * Phase 0：工具实现不再直接调用采集层，一律走 services/*。
  *
@@ -511,6 +511,8 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       if (args.maxDepth !== undefined) config.maxDepth = Number(args.maxDepth);
       if (args.concurrency !== undefined) config.concurrency = Number(args.concurrency);
       const result = await crawlSite(site, { config });
+      // T4：站点级问题聚合（纯函数）。只新增字段，原有字段不动 —— 向后兼容
+      const analysis = analyzeSiteIssues(result);
       return {
         origin: result.origin,
         pages: result.pages.map((p) => ({
@@ -528,6 +530,9 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
           nodes: result.graph.nodes.length,
           edges: result.graph.edges.length,
         },
+        issues: analysis.issues,
+        geoSummary: analysis.geoSummary,
+        schemaCoverage: analysis.schemaCoverage,
       };
     }
 

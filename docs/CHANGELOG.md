@@ -13,6 +13,30 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
+## [Phase 2 T4] — 2026-10-08 · 站点级问题聚合（8 类规则 + 证据 + 疑似重复检测）
+
+> 全部纯函数，输入 T3 的 CrawlResult，输出带 evidence 的问题列表。不调模型、不做 IO。
+
+### 核心变更
+
+1. **新增 `src/lib/crawler/issues.ts`**：`analyzeSiteIssues(result): SiteAnalysis` —— 8 类检查：① 重复 title/desc/H1（URL 分组）② 缺失 title/desc/H1/canonical ③ canonical 异常（跨域/指向 4xx/指向跳转页）④ 孤岛/深页/内链过少 ⑤ 跳转链过长/跳转循环/坏链 ⑥ JSON-LD 覆盖率 + 长文页缺 Schema ⑦ GEO 分数段分布/最低分页面/共性弱维度（同维度 ≥3 页偏弱）⑧ 疑似内容重复。
+2. **每个问题**：稳定 `id`（type+URL 集合哈希，复检同问题 id 不变）、`severity`、`affectedUrls`、`evidence[]`（具体字段值/分组/相似度）、`whyItMatters`、`suggestedFix`。severity 阈值全部为顶部导出的可读常量并被测试断言。
+3. **疑似内容重复**（`src/lib/crawler/content.ts`）：正文 5-gram shingle（英文按词、中文按单字）的 sha1 短哈希 + Jaccard 相似度，阈值 0.8；并查集聚组避免两两重复报告；只存哈希不存正文；<50 token 短页不参与；结论永远标注「疑似」并附百分比依据。`CrawlPage` 新增可选 `contentShingles` 与 `geoBreakdown`，采集时由 `crawlSite` 计算。
+4. **判定边界**：内容/标签类问题只对「可索引 2xx 页面」（非 blocked、非 noindex）成立；canonical 4xx 检查的目标索引用全部页面（含 4xx），避免漏报。
+5. **集成**：`crawl_site` MCP 输出新增 `issues` / `geoSummary` / `schemaCoverage`（仅新增字段，向后兼容）；`/api/crawl` 服务端计算后下发并剥离内部正文指纹；`/crawl` 页面新增问题区（严重度 chips + 类型下拉筛选，点击展开受影响 URL / 证据 / 影响 / 建议）。
+6. **测试**：新增 `tests/unit/crawler-issues.test.ts` 31 项，每类问题均有命中与不命中两个方向，外加排序、id 稳定性、空结果用例。
+
+### 验证
+
+- `npm test`：227 项全量通过（+31）；`npm run typecheck`：0 error；`npm run lint`：0 error（8 既有 warning）；`npm run build`：成功。
+
+### 已知限制
+
+- 跳转链精度受 T3 采集限制：`FetchAttempt` 不含逐跳 URL，当前链最多记录最终 URL；多跳链/循环检查器已实现且有单测（合成输入），真实数据下检测精度随采集层升级而提升。
+- 共性弱维度依赖各页 `geoBreakdown`，GEO 1.0.0/2.0.0 评分维度 id 不同，跨版本聚合时按维度 id 分别统计。
+
+---
+
 ## [Phase 2 T3] — 2026-10-08 · 有上限的站点爬虫
 
 > GEOkit 从单页审计升级为站点级审计的基础。有礼貌、有上限、可中断，零新增依赖。

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { crawlSite } from "@/lib/crawler";
+import { crawlSite, analyzeSiteIssues } from "@/lib/crawler";
 import type { CrawlConfig } from "@/lib/crawler";
 
 export const runtime = "nodejs";
@@ -35,7 +35,20 @@ export async function POST(req: Request) {
 
   try {
     const result = await crawlSite(site, { config });
-    return NextResponse.json(result);
+    // T4：站点级问题聚合（纯函数，服务端算好再下发）
+    const analysis = analyzeSiteIssues(result);
+    // contentShingles 是内部正文指纹，不随响应下发；其余页面字段照常
+    const pages = result.pages.map((p) => {
+      const { contentShingles: _cs, ...rest } = p;
+      return rest;
+    });
+    return NextResponse.json({
+      ...result,
+      pages,
+      issues: analysis.issues,
+      geoSummary: analysis.geoSummary,
+      schemaCoverage: analysis.schemaCoverage,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : String(e) },

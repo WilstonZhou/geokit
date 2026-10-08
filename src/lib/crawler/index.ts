@@ -28,8 +28,11 @@ import { normalizeCrawlUrl, isStaticAsset, isSameDomain, extractLinks } from "./
 import { allowedByRobots, crawlDelayFor, fetchAndParseRobots } from "./robots";
 import { discoverSitemaps } from "./sitemap";
 import { buildSiteGraph } from "./graph";
+import { computeShingles } from "./content";
 
 export { diffCrawlResults } from "./diff";
+export { analyzeSiteIssues } from "./issues";
+export { ISSUE_TYPES, ISSUE_SEVERITY, DUPLICATE_CONTENT_JACCARD } from "./issues";
 export type {
   CrawlConfig,
   CrawlPage,
@@ -41,6 +44,15 @@ export type {
   GraphEdge,
   SiteGraph,
 } from "./types";
+export type {
+  SiteIssue,
+  IssueType,
+  IssueSeverity,
+  IssueEvidence,
+  SiteAnalysis,
+  GeoSummary,
+  SchemaCoverageEntry,
+} from "./issues";
 
 const CRAWL_OBSERVER_VERSION = "crawl-observer@0.1.0";
 const CRAWL_PARSER_VERSION = "crawler@0.1.0";
@@ -252,6 +264,10 @@ export async function crawlSite(
     page.wordCount = audit.wordCount;
     page.geoScore = audit.geoScore;
     page.seoScore = audit.seoScore;
+    page.geoBreakdown = audit.geoBreakdown;
+
+    // T4：正文 shingle 指纹（仅哈希，不存正文）。过短页面返回 null
+    page.contentShingles = computeShingles(html) ?? undefined;
 
     // outLinks：从 html 提取，过滤到同域
     const allLinks = extractLinks(html, finalUrl);

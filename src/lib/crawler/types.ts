@@ -60,12 +60,19 @@ export interface CrawlPage {
   wordCount: number;
   geoScore: number;
   seoScore: number;
+  /** GEO 六维明细（T4 共性弱维度分析用，可选） */
+  geoBreakdown?: { id: string; label: string; score: number; max: number }[];
   /** 被拦截（403/验证码）时如实标注，不绕过 */
   blocked?: { reason: string };
   /** 本页在站点图中的点击深度（起点为 0） */
   clickDepth: number;
   /** 本页指向的站内规范化 URL 列表 —— 用于构建站点图的边 */
   outLinks: string[];
+  /**
+   * 正文 n-gram shingle 的短哈希（T4 疑似内容重复检测用）。
+   * 刻意只存哈希不存正文：体积小、可落库；空 body / 过短页面为 undefined。
+   */
+  contentShingles?: string[];
 }
 
 export interface GraphNode {

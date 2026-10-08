@@ -40,7 +40,68 @@ interface CrawlResult {
   reason?: string;
   startedAt: string;
   elapsedMs: number;
+  issues: SiteIssue[];
+  geoSummary: GeoSummary;
+  schemaCoverage: { type: string; pages: number; ratio: number }[];
 }
+
+type IssueSeverity = "high" | "medium" | "low";
+
+interface IssueEvidence {
+  fact: string;
+  value?: string | number;
+}
+
+interface SiteIssue {
+  id: string;
+  type: string;
+  severity: IssueSeverity;
+  title: string;
+  affectedUrls: string[];
+  evidence: IssueEvidence[];
+  whyItMatters: string;
+  suggestedFix: string;
+}
+
+interface GeoSummary {
+  distribution: { critical: number; poor: number; fair: number; good: number };
+  lowestScoring: { url: string; geoScore: number }[];
+  commonWeakDimensions: { id: string; label: string; pages: number }[];
+}
+
+/** 问题类型的中文短标签（未知类型回退原值） */
+const ISSUE_TYPE_LABELS: Record<string, string> = {
+  "duplicate-title": "重复 title",
+  "duplicate-meta-description": "重复 meta description",
+  "duplicate-h1": "重复 H1",
+  "missing-title": "缺 title",
+  "missing-meta-description": "缺 meta description",
+  "missing-h1": "缺 H1",
+  "missing-canonical": "缺 canonical",
+  "canonical-anomaly": "canonical 异常",
+  "orphan-page": "孤岛页",
+  "deep-page": "深度过深",
+  "low-inlinks": "内链过少",
+  "long-redirect-chain": "跳转链过长",
+  "redirect-loop": "跳转循环",
+  "broken-internal-link": "坏链",
+  "missing-structured-data": "缺结构化数据",
+  "low-geo-score": "GEO 低分",
+  "weak-geo-dimension": "共性弱维度",
+  "duplicate-content": "疑似内容重复",
+};
+
+const SEVERITY_TONE: Record<IssueSeverity, "bad" | "warn" | "neutral"> = {
+  high: "bad",
+  medium: "warn",
+  low: "neutral",
+};
+
+const SEVERITY_LABEL: Record<IssueSeverity, string> = {
+  high: "高",
+  medium: "中",
+  low: "低",
+};
 
 type StatusFilter = "all" | "2xx" | "3xx" | "4xx" | "5xx" | "blocked";
 
@@ -64,6 +125,18 @@ export default function CrawlPage() {
   const [err, setErr] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [orphanOnly, setOrphanOnly] = useState(false);
+  const [issueSeverity, setIssueSeverity] = useState<"all" | IssueSeverity>("all");
+  const [issueType, setIssueType] = useState<string>("all");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  function toggleIssue(id: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   async function run() {
     const t = site.trim();
@@ -85,6 +158,7 @@ export default function CrawlPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "爬取失败");
       setData(json as CrawlResult);
+      setExpanded(new Set());
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -114,6 +188,31 @@ export default function CrawlPage() {
       return true;
     });
   }, [data, statusFilter, orphanOnly, orphanSet]);
+
+  // 问题类型选项（本次爬取实际出现的类型，按出现频次排序）
+  const issueTypes = useMemo(() => {
+    if (!data) return [] as { type: string; count: number }[];
+    const counts = new Map<string, number>();
+    for (const i of data.issues) counts.set(i.type, (counts.get(i.type) ?? 0) + 1);
+    return [...counts.entries()]
+      .map(([type, count]) => ({ type, count }))
+      .sort((a, b) => b.count - a.count);
+  }, [data]);
+
+  const filteredIssues = useMemo(() => {
+    if (!data) return [];
+    return data.issues.filter((i) => {
+      if (issueSeverity !== "all" && i.severity !== issueSeverity) return false;
+      if (issueType !== "all" && i.type !== issueType) return false;
+      return true;
+    });
+  }, [data, issueSeverity, issueType]);
+
+  const issueCountBySeverity = useMemo(() => {
+    const c = { high: 0, medium: 0, low: 0 };
+    for (const i of data?.issues ?? []) c[i.severity]++;
+    return c;
+  }, [data]);
 
   return (
     <div className="space-y-6">
@@ -204,6 +303,112 @@ export default function CrawlPage() {
               <Stat label="最大深度" value={data.pages.reduce((m, p) => Math.max(m, p.clickDepth), 0)} />
               <Stat label="blocked 页" value={data.pages.filter((p) => p.blocked).length} tone="bad" />
             </div>
+          </Card>
+
+          <Card>
+            <SectionTitle
+              title={`站点问题（${data.issues.length}）`}
+              desc="按严重度与类型筛选；点击问题查看受影响 URL 与证据。内容重复结论为「疑似」。"
+              action={
+                <div className="flex flex-wrap items-center gap-2">
+                  {(["all", "high", "medium", "low"] as const).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setIssueSeverity(s)}
+                      className={`rounded-md border px-2.5 py-1 text-[11.5px] transition ${
+                        issueSeverity === s
+                          ? "border-ocean-200 bg-ocean-50 text-ocean-700"
+                          : "border-ink-200 bg-white text-ink-600 hover:border-ocean-300"
+                      }`}
+                    >
+                      {s === "all"
+                        ? `全部 ${data.issues.length}`
+                        : `${SEVERITY_LABEL[s]} ${issueCountBySeverity[s]}`}
+                    </button>
+                  ))}
+                  <select
+                    className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[11.5px] text-ink-700"
+                    value={issueType}
+                    onChange={(e) => setIssueType(e.target.value)}
+                  >
+                    <option value="all">全部类型</option>
+                    {issueTypes.map((t) => (
+                      <option key={t.type} value={t.type}>
+                        {ISSUE_TYPE_LABELS[t.type] ?? t.type}（{t.count}）
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              }
+            />
+            {filteredIssues.length === 0 ? (
+              <p className="py-6 text-center text-[12px] text-ink-500">当前筛选下无问题</p>
+            ) : (
+              <ul className="divide-y divide-ink-100">
+                {filteredIssues.map((issue) => {
+                  const open = expanded.has(issue.id);
+                  return (
+                    <li key={issue.id} className="py-2">
+                      <button
+                        onClick={() => toggleIssue(issue.id)}
+                        className="flex w-full items-center gap-2.5 text-left"
+                      >
+                        <Badge tone={SEVERITY_TONE[issue.severity]}>
+                          {SEVERITY_LABEL[issue.severity]}
+                        </Badge>
+                        <span className="shrink-0 rounded bg-ink-100 px-1.5 py-0.5 text-[10.5px] text-ink-600">
+                          {ISSUE_TYPE_LABELS[issue.type] ?? issue.type}
+                        </span>
+                        <span className="flex-1 text-[12.5px] text-ink-900">{issue.title}</span>
+                        <span className="shrink-0 text-[11px] tabular text-ink-500">
+                          {issue.affectedUrls.length} URL
+                        </span>
+                        <span className="shrink-0 text-[10px] text-ink-400">{open ? "▲" : "▼"}</span>
+                      </button>
+                      {open && (
+                        <div className="mt-2.5 space-y-2.5 rounded-lg bg-ink-50 p-3 pl-9 text-[12px]">
+                          <div>
+                            <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-ink-500">
+                              受影响 URL（{issue.affectedUrls.length}）
+                            </p>
+                            <ul className="max-h-40 space-y-0.5 overflow-y-auto break-all">
+                              {issue.affectedUrls.map((u) => (
+                                <li key={u} className="text-ink-800">{u}</li>
+                              ))}
+                            </ul>
+                          </div>
+                          <div>
+                            <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-ink-500">
+                              证据
+                            </p>
+                            <ul className="space-y-0.5">
+                              {issue.evidence.map((e, idx) => (
+                                <li key={idx} className="text-ink-700">
+                                  {e.fact}
+                                  {e.value !== undefined && (
+                                    <span className="ml-1 break-all rounded bg-white px-1 py-0.5 font-mono text-[11px] text-ink-600">
+                                      {String(e.value)}
+                                    </span>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                          <p className="text-ink-700">
+                            <span className="font-medium text-ink-900">影响：</span>
+                            {issue.whyItMatters}
+                          </p>
+                          <p className="text-ink-700">
+                            <span className="font-medium text-ink-900">建议：</span>
+                            {issue.suggestedFix}
+                          </p>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </Card>
 
           <Card>
