@@ -371,7 +371,7 @@ export const TOOLS: ToolDef[] = [
         source: { type: "string", description: "观测来源（如 'search-engine:baidu'）" },
         type: {
           type: "string",
-          enum: ["rank", "geo_score", "ai_mention", "robots_policy", "llms_txt", "serp", "audit", "ai_citation", "crawl", "gsc", "robots", "llms"],
+          enum: ["rank", "geo_score", "ai_mention", "robots_policy", "llms_txt", "serp", "audit", "ai_citation", "crawl", "gsc", "robots", "llms", "performance"],
           description: "观测类型",
         },
         status: { type: "string", description: "观测状态（如 'OBSERVED', 'MENTIONED', 'BLOCKED'）" },

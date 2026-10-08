@@ -52,11 +52,18 @@ open-seo 是个好项目 —— 28 万行代码、自研站点审计爬虫、完
 | 能力 | 说明 |
 | --- | --- |
 | **多引擎 SERP 采集** | 百度、搜狗、360、神马、头条的自建采集与位次解析，外加 Google / Bing |
-| **页面审计 + GEO 评分** | 除传统技术检查外，输出六维「AI 引用友好度」评分 |
+| **页面审计 + GEO 评分** | 除传统技术检查外，输出六维「AI 引用友好度」评分（scoringVersion 2.1.0） |
 | **中文 AI 可见性矩阵** | 九个模型并发探测品牌是否被提及，并升级为引用情报（谁被引用、引用了哪些来源、我的缺口在哪） |
 | **AI 抓取协议层** | robots.txt 的 20 个 AI 爬虫策略检测、llms.txt 校验与自动生成 |
 | **观测与存档** | 全通道 Observation 落库 + 不可变 Evidence 存证，时序 diff 识别提升与退化 |
-| **MCP Server** | 上述全部能力对外开放，两种传输方式 |
+| **站点爬虫** | 有礼貌的 BFS 爬虫（robots 遵守、并发/间隔限制、可中断），产出站点图与每页审计摘要 |
+| **竞品情报** | 五维对比：SERP 位次 / AI 提及 / GEO 评分 / AI 抓取协议 / 结构化数据 |
+| **Query 情报** | 意图分类、相关问题提取、竞品识别、内容缺口、聚类分析 |
+| **机会引擎** | 八种机会类型（弱引用、引用缺口、AI 协议、站点问题、搜索机会、缺失实体、Schema 问题、性能差），evidence 驱动，可验证 |
+| **Schema / 实体诊断** | 规则驱动检测 7 类页面，零编造 JSON-LD 草稿生成 |
+| **国际化** | 三种来源 hreflang 检查（HTML / HTTP header / sitemap），六类问题 + 语言声明疑似不一致 |
+| **性能观测** | CrUX 真实用户数据（LCP/INP/CLS/FCP/TTFB），差指标自动生成机会 |
+| **MCP Server** | 25 个核心工具，全部能力对外开放，两种传输方式 |
 
 ## 界面
 
@@ -75,7 +82,7 @@ open-seo 是个好项目 —— 28 万行代码、自研站点审计爬虫、完
 </tr>
 <tr>
 <td><b>AI 抓取协议层</b><br>20 个 AI 爬虫的 robots 策略 + llms.txt 校验与生成</td>
-<td><b>MCP Server</b><br>23 个核心工具、两种传输方式，附可直接粘贴的接入配置</td>
+<td><b>MCP Server</b><br>25 个核心工具、两种传输方式，附可直接粘贴的接入配置</td>
 </tr>
 <tr>
 <td><img src="docs/screenshots/04-llms.png" alt="AI 抓取协议层"></td>
@@ -174,7 +181,30 @@ POST http://localhost:3210/api/mcp
 - Schema：`analyze_schema`（页面类型/字段/一致性/实体诊断）、`generate_schema_draft`（零编造 JSON-LD 草稿）
 - 国际化：`check_hreflang`（三种来源 hreflang 检查：自引用/回链/非法代码/坏链/canonical 冲突/x-default/语言声明疑似不一致）
 
-典型 Agent 闭环：找排名缺口 → 页面深度诊断 → 自动应用修复 → 复查 AI 协议 → 历史比对确认退化/提升。
+### 典型 Agent 闭环（6 步）
+
+```
+check_serp_ranking        → 找排名缺口（哪些引擎没进前 10）
+  ↓
+crawl_site                → 站点爬取，获取所有页面审计摘要
+  ↓
+diagnose_page             → 对关键页面深度诊断（内容/协议/SEO）
+  ↓
+apply_fixes               → 自动修复 HTML 缺陷（canonical/viewport/lang/alt）
+  ↓
+analyze_ai_citations      → 分析 AI 引用缺口（竞品在哪些 query 被引用）
+  ↓
+list_opportunities        → 汇总所有发现为可执行机会（8 种类型）
+  ↓
+analyze_robots +          → 复查 AI 协议层（robots/llms.txt）
+analyze_llms_txt
+  ↓
+diff_observations         → 历史比对确认退化/提升
+  ↓
+verify_opportunity        → 修复后复检
+```
+
+每一步都遵循「抓不到就说抓不到」原则，无数据时不编造。
 
 ## 可选的环境变量
 

@@ -13,6 +13,58 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
+## [Phase 2 T13] — 2026-10-09 · 整体收尾（MCP 一致性 / 文档 / 质量门禁 / 安全 / 能力对照）
+
+> 在前面 12 个任务全部完成的基础上，对全项目做一次收尾：MCP 工具一致性检查、README 全面更新、docs/ 数据模型/评分规则/扩展指南补齐、质量门禁与依赖检查、安全检查，最后输出能力完成度对照表。
+
+### 核心变更
+
+**修改文件**：
+- `src/lib/mcp.ts` — 修复 `list_observations` 工具 enum：补全 `performance` 类型（T11 遗留遗漏）
+- `README.md` — 能力表新增 6 项（站点爬虫/竞品情报/Query 情报/机会引擎/Schema 诊断/国际化/性能观测）；MCP 工具列表 24→25 + 国际化分组；典型 Agent 闭环示例（6 步流程图）
+
+**新增文件（3 个）**：
+- `docs/DATA_MODEL.md` — 数据模型说明（两层分离 / ObservationKind 11 类 / 状态机 / 存储实现 / 环境变量表）
+- `docs/GEO_SCORING.md` — GEO 评分规则说明（双版本号 / 六维权重 / scoringVersion 2.1.0 新信号与子权重重分配 / 版本升级策略）
+- `docs/EXTENDING.md` — 扩展指南（新增引擎/模型/机会类型/诊断规则/修复规则/GEO 信号/MCP 工具/页面路由/存储驱动/观测类型）
+
+- `docs/CAPABILITY_MATRIX.md` — 能力完成度对照表（T0-T13 规划 vs 实现 vs 限制）
+
+### 质量门禁确认
+
+- typecheck ✅（0 errors）
+- lint ✅（0 errors / 5 pre-existing warnings）
+- test ✅（445/445 pass）
+- build ✅（next build 成功）
+
+### 依赖检查
+
+直接依赖 4 个，无新增：
+
+| 包 | 版本 | 用途 |
+|----|------|------|
+| next | 16.3.5 | React 框架 / App Router |
+| react | 19.2.0 | UI 库 |
+| react-dom | 19.2.0 | React DOM 渲染 |
+| zod | 4.1.12 | schema 定义（dev 时类型） |
+
+devDependencies 11 个（eslint / tailwind / tsx / typescript 等）。
+
+### 安全检查
+
+- ✅ 无密钥/令牌/私钥泄露到日志或 Observation（仅返回状态码）
+- ✅ CrUX 客户端串行执行 + 500ms 间隔，遵守 150 QPM 限制
+- ✅ 爬虫默认并发 2 / 间隔 500ms / maxPages 100 / maxDepth 3 / 2 分钟总耗时
+- ✅ AI 探测并发 2（可配置 1-5）
+- ✅ 所有外部输入经 typeof + 非空校验
+
+### 已知限制 / 待办
+
+- zod 仅用于 development deps，运行时未启用 zod schema 严格校验（用 typeof 校验代替，保持零新增依赖）
+- 爬虫 FetchAttempt 不包含 URL，精确度有限（T4 遗留）
+- 站点爬虫并发/间隔限制硬编码（默认 2/500ms），未开放环境变量
+- 无 /hreflang 页面（仅 MCP 工具）
+
 ## [Phase 2 T12] — 2026-10-09 · 国际化 / hreflang 检查
 
 > 三种来源（HTML link / HTTP header / sitemap）统一解析 hreflang，六类检查规则，接入 T4 issues 结构。无多语言配置时返回「不适用」，不产生误报。
