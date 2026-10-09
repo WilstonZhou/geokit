@@ -98,7 +98,7 @@ export interface AuditOptions {
 
 const FETCH_TIMEOUT_MS = 15_000;
 
-export async function auditUrl(inputUrl: string, opts?: AuditOptions): Promise<PageAudit> {
+export async function auditUrl(inputUrl: string, _opts?: AuditOptions): Promise<PageAudit> {
   const started = Date.now();
   const normalized = normalizeUrl(inputUrl);
 

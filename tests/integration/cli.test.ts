@@ -6,7 +6,6 @@ import { join } from "node:path";
 
 import {
   MUST_ALLOW_CRAWLERS,
-  buildCheckReport,
   checkFailure,
   checkHtml,
   diagnoseProtocol,
@@ -15,7 +14,6 @@ import {
 import { DEFAULT_GATE, evaluateGate, runGate, snapshotFromFile, snapshotOf, type GateSnapshot } from "../../packages/cli/src/gate";
 import { runDiff } from "../../packages/cli/src/diff";
 import { OUTPUT_FORMATS, parseFormat, renderCheck, renderDiff, renderGate } from "../../packages/cli/src/output";
-import { analyze } from "../../src/lib/audit";
 import { AI_CRAWLERS, type AiCrawler } from "../../src/lib/llms";
 import { createStore } from "../../src/lib/store";
 import type { Observation } from "../../src/lib/evidence/types";

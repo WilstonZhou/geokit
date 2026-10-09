@@ -2,7 +2,7 @@ import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { computeGeo, computeGeoV1, computeGeoV2, type GeoInput } from "../../src/lib/geo";
+import { computeGeo } from "../../src/lib/geo";
 import { analyze } from "../../src/lib/audit";
 
 describe("GEO Engine v1 & v2 (Unit Tests)", () => {

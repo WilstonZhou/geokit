@@ -26,6 +26,12 @@ jobs:
       - name: 类型检查
         run: npm run typecheck
 
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Run Test Suite
+        run: npm test
+
       - name: 构建
         run: npm run build
 

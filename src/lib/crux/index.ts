@@ -5,3 +5,5 @@ export * from "./types";
 export * from "./client";
 export * from "./analyze";
 export * from "./observe";
+export * from "./sample";
+export * from "./psi";

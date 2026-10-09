@@ -224,4 +224,74 @@ describe("crawlSite 集成（假站点）", () => {
     assert.ok(bNode);
     assert.ok(bNode!.inlinks >= 2, `/b 入链应 >= 2，实际 ${bNode!.inlinks}`);
   });
+
+  it("Sitemap 孤岛页补充抓取与 orphan=true 判定 (回归测试)", async () => {
+    const sitemapContent = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://example.com/</loc></url>
+  <url><loc>https://example.com/orphan</loc></url>
+</urlset>`;
+
+    const sites: Record<string, { body: string }> = {
+      "https://example.com/": {
+        body: `<html><head><title>首页</title></head><body><h1>首页无孤岛页链接</h1><a href="/about">关于</a></body></html>`,
+      },
+      "https://example.com/about": {
+        body: `<html><head><title>关于</title></head><body><p>内容</p></body></html>`,
+      },
+      "https://example.com/orphan": {
+        body: `<html><head><title>孤岛页面</title></head><body><p>无站内入链</p></body></html>`,
+      },
+      "https://example.com/robots.txt": {
+        body: `User-agent: *\nAllow: /\nSitemap: https://example.com/sitemap.xml`,
+      },
+      "https://example.com/sitemap.xml": {
+        body: sitemapContent,
+      },
+    };
+
+    const fetcher = makeFetcher(sites);
+    const r = await crawlSite("example.com", {
+      fetcher,
+      config: { maxPages: 10, maxDepth: 2, concurrency: 1, minRequestIntervalMs: 0 },
+    });
+
+    const orphanPage = r.pages.find((p) => p.url === "https://example.com/orphan");
+    assert.ok(orphanPage, "Sitemap 中的孤岛页 /orphan 应被补充爬取入 pages");
+
+    const orphanNode = r.graph.nodes.find((n) => n.url === "https://example.com/orphan");
+    assert.ok(orphanNode, "Site Graph 中应存在 /orphan 节点");
+    assert.strictEqual(orphanNode!.inlinks, 0, "/orphan 入链数应为 0");
+    assert.strictEqual(orphanNode!.orphan, true, "/orphan 节点的 orphan 属性必须为 true");
+  });
+
+  it("网络异常不丢弃：记录 httpStatus=0 与 connection_failure", async () => {
+    const sites: Record<string, { body: string }> = {
+      "https://example.com/": {
+        body: `<html><body><a href="/error-link">异常链接</a></body></html>`,
+      },
+      "https://example.com/robots.txt": { body: "" },
+    };
+
+    const fetcher: Fetcher = async (req) => {
+      if (req.url === "https://example.com/error-link") {
+        throw new Error("ETIMEDOUT: Connection timed out");
+      }
+      const entry = sites[req.url];
+      if (!entry) return fakeFetchResult("Not Found", req.url, 404);
+      return fakeFetchResult(entry.body, req.url, 200);
+    };
+
+    const r = await crawlSite("example.com", {
+      fetcher,
+      config: { maxPages: 5, maxDepth: 1, concurrency: 1, minRequestIntervalMs: 0 },
+    });
+
+    const errPage = r.pages.find((p) => p.url === "https://example.com/error-link");
+    assert.ok(errPage, "网络异常页面不应被丢弃，应记录在 pages 中");
+    assert.strictEqual(errPage!.httpStatus, 0);
+    assert.strictEqual(errPage!.statusReason, "connection_failure");
+    assert.ok(errPage!.error?.includes("ETIMEDOUT"));
+    assert.deepStrictEqual(errPage!.outLinks, []);
+  });
 });

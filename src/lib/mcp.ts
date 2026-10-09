@@ -8,6 +8,7 @@
  * 协议实现遵循 MCP 2025-06-18 的 tools 能力，不含不必要的 SDK 依赖。
  */
 
+import { z } from "zod";
 import { auditUrl } from "./audit";
 import { CN_ENGINES, GLOBAL_ENGINES, ENGINE_LIST, type EngineId } from "./engines";
 import { analyzeRobots, analyzeLlmsTxt, generateLlmsTxtDraft } from "./llms";
@@ -673,7 +674,204 @@ function normalizeGscDims(v: unknown): GscDimension[] | undefined {
   return dims.length > 0 ? Array.from(new Set(dims)) : undefined;
 }
 
+function formatZodIssues(issues: z.ZodIssue[]): string {
+  return issues
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+      return `参数 '${path}': ${issue.message}`;
+    })
+    .join("; ");
+}
+
+const listObservationsSchema = z.object({
+  subject: z.string().optional(),
+  target: z.string().optional(),
+  source: z.string().optional(),
+  type: z.string().optional(),
+  status: z.string().optional(),
+  runId: z.string().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  order: z.enum(["asc", "desc"]).optional(),
+  limit: z.union([z.number(), z.string()]).optional(),
+  latest: z.union([z.boolean(), z.string(), z.number()]).optional(),
+}).passthrough();
+
+const schemaDraftOrAnalysisSchema = z.object({
+  url: z.string().optional(),
+  html: z.string().optional(),
+}).passthrough().refine(
+  (data) => Boolean((data.url && data.url.trim()) || (data.html && data.html.trim())),
+  { message: "url 与 html 至少提供一个" }
+);
+
+const TOOL_SCHEMAS: Record<string, z.ZodTypeAny> = {
+  list_engines: z.record(z.string(), z.unknown()).optional(),
+  check_serp_ranking: z.object({
+    keyword: z.string().trim().min(1, "缺少 keyword"),
+    engines: z.array(z.string()).optional(),
+    group: z.enum(["cn", "global", "all"]).optional(),
+    targetDomain: z.string().optional(),
+    pages: z.union([z.number(), z.string()]).optional(),
+  }).passthrough(),
+  audit_page: z.object({
+    url: z.string().trim().min(1, "缺少 url"),
+    geo_version: z.enum(["1.0.0", "2.0.0"]).optional(),
+  }).passthrough(),
+  analyze_ai_citations: z.object({
+    queries: z.array(z.string()).min(1, "缺少 queries 列表"),
+    brand: z.string().trim().min(1, "缺少 brand"),
+    domain: z.string().trim().min(1, "缺少 domain"),
+    competitors: z.array(z.string()).optional(),
+    concurrency: z.union([z.number(), z.string()]).optional(),
+  }).passthrough(),
+  check_ai_visibility: z.object({
+    brand: z.string().trim().min(1, "缺少 brand"),
+    topic: z.string().trim().min(1, "缺少 topic"),
+    competitors: z.array(z.string()).optional(),
+  }).passthrough(),
+  crawl_site: z.object({
+    site: z.string().trim().min(1, "缺少 site"),
+    maxPages: z.union([z.number(), z.string()]).optional(),
+    maxDepth: z.union([z.number(), z.string()]).optional(),
+    concurrency: z.union([z.number(), z.string()]).optional(),
+  }).passthrough(),
+  get_search_performance: z.object({
+    siteUrl: z.string().trim().min(1, "缺少 siteUrl"),
+    startDate: z.string().optional(),
+    endDate: z.string().optional(),
+    dimensions: z.array(z.string()).optional(),
+    rowLimit: z.union([z.number(), z.string()]).optional(),
+  }).passthrough(),
+  analyze_search_opportunities: z.object({
+    siteUrl: z.string().trim().min(1, "缺少 siteUrl"),
+    startDate: z.string().optional(),
+    endDate: z.string().optional(),
+    dimensions: z.array(z.string()).optional(),
+    crawledUrls: z.array(z.string()).optional(),
+  }).passthrough(),
+  analyze_robots: z.object({
+    site: z.string().trim().min(1, "缺少 site"),
+  }).passthrough(),
+  analyze_llms_txt: z.object({
+    site: z.string().trim().min(1, "缺少 site"),
+  }).passthrough(),
+  generate_llms_txt: z.object({
+    site: z.string().trim().min(1, "缺少 site"),
+    siteName: z.string().optional(),
+    description: z.string().optional(),
+    maxLinks: z.union([z.number(), z.string()]).optional(),
+  }).passthrough(),
+  compare_with_openseo: z.record(z.string(), z.unknown()).optional(),
+  diagnose_page: z.object({
+    url: z.string().optional(),
+    html: z.string().optional(),
+    skipProtocol: z.boolean().optional(),
+    geo_version: z.enum(["1.0.0", "2.0.0"]).optional(),
+  }).passthrough().refine(
+    (data) => Boolean((data.url && data.url.trim()) || (data.html && data.html.trim())),
+    { message: "diagnose_page 需要提供 url 或 html 其中之一" }
+  ),
+  apply_fixes: z.object({
+    html: z.string({ error: "apply_fixes 缺少必需的 html 参数" }),
+    url: z.string().optional(),
+    fixIds: z.array(z.string()).optional(),
+  }).passthrough(),
+  diff_observations: z.object({
+    target: z.string().optional(),
+    subject: z.string().optional(),
+    type: z.string().optional(),
+    source: z.string().optional(),
+    to: z.string().optional(),
+    prev: z.record(z.string(), z.unknown()).optional(),
+    curr: z.record(z.string(), z.unknown()).optional(),
+  }).passthrough().refine(
+    (data) => {
+      if (data.prev || data.curr) {
+        return Boolean(data.prev && data.curr);
+      }
+      return Boolean(data.subject && data.type);
+    },
+    { message: "diff_observations 需要提供 subject 与 type，或提供 prev 与 curr 对象" }
+  ),
+  list_observations: listObservationsSchema,
+  query_history: listObservationsSchema,
+  list_opportunities: z.object({
+    siteAnalysis: z.record(z.string(), z.unknown()).optional(),
+    citationAggregation: z.record(z.string(), z.unknown()).optional(),
+    userDomain: z.string().optional(),
+    robotsAnalysis: z.record(z.string(), z.unknown()).optional(),
+    llmsTxtAnalysis: z.record(z.string(), z.unknown()).optional(),
+    gscOpportunities: z.array(z.unknown()).optional(),
+    pageAudits: z.array(z.unknown()).optional(),
+  }).passthrough(),
+  verify_opportunity: z.object({
+    opportunity: z.record(z.string(), z.unknown()),
+    prevObservations: z.array(z.unknown()),
+    currObservations: z.array(z.unknown()),
+  }).passthrough(),
+  analyze_query: z.object({
+    query: z.string().trim().min(1, "缺少 query"),
+    serpResults: z.array(z.unknown()).optional(),
+    aiCitations: z.array(z.unknown()).optional(),
+    gscOpportunities: z.array(z.unknown()).optional(),
+    userCrawl: z.record(z.string(), z.unknown()).optional(),
+    userDomain: z.string().optional(),
+  }).passthrough(),
+  cluster_queries: z.object({
+    queries: z.array(z.record(z.string(), z.unknown())).min(1, "queries 数组不能为空"),
+    jaccardThreshold: z.union([z.number(), z.string()]).optional(),
+    minSharedUrls: z.union([z.number(), z.string()]).optional(),
+  }).passthrough(),
+  compare_competitors: z.object({
+    userDomain: z.string().trim().min(1, "缺少 userDomain"),
+    competitors: z.array(z.string()).min(1, "至少需要 1 个竞品域名"),
+    queries: z.array(z.string()).optional(),
+    serpResults: z.array(z.unknown()).optional(),
+    aiCitations: z.array(z.unknown()).optional(),
+    userPageAudits: z.array(z.unknown()).optional(),
+    competitorPageAudits: z.array(z.unknown()).optional(),
+    competitorPageUrls: z.array(z.string()).optional(),
+    userRobots: z.record(z.string(), z.unknown()).optional(),
+    userLlmsTxt: z.record(z.string(), z.unknown()).optional(),
+    competitorRobots: z.array(z.unknown()).optional(),
+    competitorLlmsTxt: z.array(z.unknown()).optional(),
+    fetchProtocol: z.boolean().optional(),
+    userCrawl: z.record(z.string(), z.unknown()).optional(),
+    competitorCrawls: z.array(z.unknown()).optional(),
+  }).passthrough(),
+  analyze_schema: schemaDraftOrAnalysisSchema,
+  generate_schema_draft: schemaDraftOrAnalysisSchema,
+  check_web_vitals: z.object({
+    urls: z.array(z.string()).optional(),
+    origins: z.array(z.string()).optional(),
+    formFactor: z.enum(["DESKTOP", "PHONE", "TABLET"]).optional(),
+    concurrency: z.union([z.number(), z.string()]).optional(),
+    minIntervalMs: z.union([z.number(), z.string()]).optional(),
+  }).passthrough().refine(
+    (data) => Boolean((data.urls && data.urls.length > 0) || (data.origins && data.origins.length > 0)),
+    { message: "urls 与 origins 至少提供一个" }
+  ),
+  check_hreflang: z.object({
+    pages: z.array(
+      z.object({
+        url: z.string().min(1, "缺少 url"),
+      }).passthrough()
+    ).min(1, "pages 数组不能为空，且每个元素必须包含 url"),
+    sitemapXml: z.string().optional(),
+  }).passthrough(),
+};
+
 async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+  const schema = TOOL_SCHEMAS[name];
+  if (!schema) {
+    throw new Error(`未知工具：${name}`);
+  }
+
+  const parsed = schema.safeParse(args ?? {});
+  if (!parsed.success) {
+    throw new Error(`MCP 参数校验失败: ${formatZodIssues(parsed.error.issues)}`);
+  }
   switch (name) {
     case "list_engines":
       return {

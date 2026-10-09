@@ -172,7 +172,7 @@ export async function querySearchAnalytics(
   };
 }
 
-function unavailableBase(reason: string): GscQueryResult {
+function _unavailableBase(reason: string): GscQueryResult {
   return { status: "unavailable", statusReason: reason, rows: [] };
 }
 

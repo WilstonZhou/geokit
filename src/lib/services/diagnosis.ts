@@ -11,7 +11,6 @@ import {
   diagnose,
   autoFixable,
   applyFixes,
-  applyFix,
   buildFixContext,
   type FixAttempt,
   type Diagnosis,

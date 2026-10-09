@@ -26,7 +26,7 @@ AIGC:
 
 > 范围注：CLI / SARIF 门禁、`diagnose_page` 与 `apply_fixes` 超出 T0–T13 主线任务书，作为附带能力存在，不影响主线契约。
 
-**[为什么造它 →](docs/ANALYSIS.md)** · [贡献指南 →](CONTRIBUTING.md)
+**[为什么造它 →](docs/ANALYSIS.md)** · [贡献指南 →](CONTRIBUTING.md) · [版本日志 →](CHANGELOG.md)
 
 GEOkit 源于对 [every-app/open-seo](https://github.com/every-app/open-seo) 的一次深度拆解。
 open-seo 是个好项目 —— 28 万行代码、自研站点审计爬虫、完整的 MCP 工具链、相当高的产品完成度。

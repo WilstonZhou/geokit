@@ -64,6 +64,10 @@ export interface CrawlPage {
   geoBreakdown?: { id: string; label: string; score: number; max: number }[];
   /** 被拦截（403/验证码）时如实标注，不绕过 */
   blocked?: { reason: string };
+  /** 抓取异常错误信息 */
+  error?: string;
+  /** 状态原因（如 connection_failure） */
+  statusReason?: string;
   /** 本页在站点图中的点击深度（起点为 0） */
   clickDepth: number;
   /** 本页指向的站内规范化 URL 列表 —— 用于构建站点图的边 */

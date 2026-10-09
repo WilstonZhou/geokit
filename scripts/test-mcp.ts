@@ -55,7 +55,7 @@ async function main() {
   const tools = listRes.result.tools;
   const toolNames = tools.map((t) => t.name);
 
-  ok(tools.length === 12, "总工具数为 12", tools.length);
+  ok(tools.length === 25, "总工具数为 25", tools.length);
   ok(toolNames.includes("list_engines"), "包含 list_engines");
   ok(toolNames.includes("check_serp_ranking"), "包含 check_serp_ranking");
   ok(toolNames.includes("audit_page"), "包含 audit_page");
@@ -67,7 +67,7 @@ async function main() {
   ok(toolNames.includes("diagnose_page"), "★ 新增包含 diagnose_page");
   ok(toolNames.includes("apply_fixes"), "★ 新增包含 apply_fixes");
   ok(toolNames.includes("diff_observations"), "★ 新增包含 diff_observations");
-  ok(toolNames.includes("query_history"), "★ 新增包含 query_history");
+  ok(toolNames.includes("list_observations"), "★ 新增包含 list_observations");
 
   console.log("\n── 2 diagnose_page：离线诊断与机器可读契约 ──");
   const sampleHtml = `<!doctype html>
@@ -129,12 +129,12 @@ async function main() {
   const fixAgainData = fixAgain.result?.structuredContent as { changed: boolean; fixedCount: number };
   ok(fixAgainData.changed === false, "★ 幂等性保证：再次修复 changed 为 false", fixAgainData.fixedCount);
 
-  console.log("\n── 4 query_history：Store 观测历史查询 ──");
-  const histRes = await callMcpTool("query_history", {
+  console.log("\n── 4 list_observations：Store 观测历史查询 ──");
+  const histRes = await callMcpTool("list_observations", {
     type: "geo_score",
     limit: 10,
   });
-  ok(!histRes.result?.isError, "query_history 执行成功");
+  ok(!histRes.result?.isError, "list_observations 执行成功");
   const histData = histRes.result?.structuredContent as {
     count: number;
     items: unknown[];

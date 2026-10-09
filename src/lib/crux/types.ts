@@ -110,6 +110,8 @@ export interface CruxObservation {
   metrics?: MetricEvaluation[];
   /** 整体评级（任一指标为 poor 则 poor） */
   overallCategory?: "FAST" | "AVERAGE" | "SLOW" | "NONE";
+  /** 数据来源：CrUX 真实用户数据或 PageSpeed Insights Lighthouse 实验室数据 */
+  dataSource?: "crux" | "psi-lighthouse";
 }
 
 /** 批量观测输入 */
@@ -128,6 +130,7 @@ export interface BatchCheckInput {
 /** 客户端选项（含测试注入） */
 export interface CruxClientOptions {
   apiKey?: string;
+  formFactor?: CruxFormFactor;
   /** 请求超时（默认 15s） */
   timeoutMs?: number;
   /** 自定义 fetch（测试注入用） */

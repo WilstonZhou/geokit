@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import {
   evaluateMetric,
   analyzeCruxObservation,
-  analyzeCruxBatch,
   queryCrux,
   batchQueryCruxRaw,
   buildCruxObservation,

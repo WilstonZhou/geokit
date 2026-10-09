@@ -193,8 +193,30 @@ export async function crawlSite(
         purpose: "crawl",
         target: url,
       });
-    } catch {
-      // 网络异常：跳过（不记录为页面）
+    } catch (err) {
+      // 网络异常不丢弃：记录失败页面
+      pages.push({
+        url,
+        finalUrl: url,
+        httpStatus: 0,
+        redirectChain: [],
+        title: null,
+        metaDescription: null,
+        h1: null,
+        canonical: null,
+        noindex: false,
+        hreflang: [],
+        jsonLdTypes: [],
+        internalLinks: 0,
+        externalLinks: 0,
+        wordCount: 0,
+        geoScore: 0,
+        seoScore: 0,
+        clickDepth: depth,
+        outLinks: [],
+        error: err instanceof Error ? err.message : "network_error",
+        statusReason: "connection_failure",
+      });
       return;
     }
     const elapsedMs = Date.now() - reqStart;
@@ -295,12 +317,12 @@ export async function crawlSite(
   }
 
   // Worker pool —— 抢占式并发
+  let queueCursor = 0;
   const runWorkers = async () => {
-    let i = 0;
     const workerCount = Math.max(1, config.concurrency);
     const workers = Array.from({ length: workerCount }, async () => {
-      while (i < queue.length) {
-        const idx = i++;
+      while (queueCursor < queue.length) {
+        const idx = queueCursor++;
         if (idx >= queue.length) break;
         const item = queue[idx];
         if (!item) continue;
@@ -319,7 +341,34 @@ export async function crawlSite(
     await Promise.all(workers);
   };
 
+  // 第一轮：基于起始页及其内链的 BFS 抓取
   await runWorkers();
+
+  // 任务 2.1：Sitemap 候选池补充与 Budget 控制
+  // 当标准 BFS 流程结束或触达 maxDepth 后，若仍有配额，从 sitemap URLs 中筛选同源且尚未访问的孤岛页补充抓取
+  const elapsedFirst = Date.now() - startedAt;
+  if (!truncated && pages.length < config.maxPages && elapsedFirst < config.totalBudgetMs) {
+    const remainingBudget = config.maxPages - pages.length;
+    const sitemapCandidates: string[] = [];
+    for (const rawUrl of sitemapUrls) {
+      const n = normalizeCrawlUrl(rawUrl);
+      if (!n) continue;
+      if (seen.has(n)) continue;
+      if (!isSameDomain(n, origin, config.includeSubdomains)) continue;
+      if (isStaticAsset(n)) continue;
+      sitemapCandidates.push(n);
+    }
+
+    const toAdd = sitemapCandidates.slice(0, remainingBudget);
+    for (const candUrl of toAdd) {
+      // 赋予 maxDepth 深度标记，确保抓取孤岛页自身后不再无休止展开深层内链，守护 Crawler Budget
+      enqueue(candUrl, config.maxDepth);
+    }
+
+    if (toAdd.length > 0) {
+      await runWorkers();
+    }
+  }
 
   // 二次检查限额（避免最后一组 worker 刚超限未标 truncated）
   if (!truncated && pages.length >= config.maxPages) {

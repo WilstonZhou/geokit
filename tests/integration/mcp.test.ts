@@ -200,4 +200,28 @@ describe("MCP Server Integration Tests", () => {
     const missingParamRes = await callMcpTool("apply_fixes", {});
     assert.strictEqual(missingParamRes.result?.isError, true);
   });
+
+  it("enforces runtime Zod schema validation across tools and returns formatted errors", async () => {
+    // 缺少必填参数
+    const resCheckSerp = await callMcpTool("check_serp_ranking", {});
+    assert.strictEqual(resCheckSerp.result?.isError, true);
+    assert.ok(resCheckSerp.result?.content[0]?.text.includes("MCP 参数校验失败"));
+    assert.ok(resCheckSerp.result?.content[0]?.text.includes("keyword"));
+
+    // 参数类型不匹配
+    const resAudit = await callMcpTool("audit_page", { url: 12345 });
+    assert.strictEqual(resAudit.result?.isError, true);
+    assert.ok(resAudit.result?.content[0]?.text.includes("MCP 参数校验失败"));
+    assert.ok(resAudit.result?.content[0]?.text.includes("url"));
+
+    // 缺少多字段之一 (refine)
+    const resDiag = await callMcpTool("diagnose_page", {});
+    assert.strictEqual(resDiag.result?.isError, true);
+    assert.ok(resDiag.result?.content[0]?.text.includes("url 或 html 其中之一"));
+
+    // 数组类型错误
+    const resHreflang = await callMcpTool("check_hreflang", { pages: "not-an-array" });
+    assert.strictEqual(resHreflang.result?.isError, true);
+    assert.ok(resHreflang.result?.content[0]?.text.includes("MCP 参数校验失败"));
+  });
 });
