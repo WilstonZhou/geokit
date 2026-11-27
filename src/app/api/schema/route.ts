@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { analyzeSchema, buildSchemaDraft, analyzeSchemaUrl } from "@/lib/schema";
+import { BodyTooLargeError, HTML_JSON_MAX_BYTES, readRequestJson } from "@/lib/api/body";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,9 +17,12 @@ export const maxDuration = 30;
 export async function POST(req: Request) {
   let body: unknown;
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "请求体必须是 JSON" }, { status: 400 });
+    body = await readRequestJson(req, HTML_JSON_MAX_BYTES);
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof BodyTooLargeError ? e.message : "请求体必须是 JSON" },
+      { status: e instanceof BodyTooLargeError ? 413 : 400 }
+    );
   }
   if (!body || typeof body !== "object") {
     return NextResponse.json({ error: "请求体必须是 JSON 对象" }, { status: 400 });

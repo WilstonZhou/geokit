@@ -25,9 +25,9 @@
     "node": ">=22.5.0"
   },
   "scripts": {
-    "dev": "next dev -p 3210",
+    "dev": "next dev -p 3210 -H 127.0.0.1",
     "build": "next build",
-    "start": "next start -p 3210",
+    "start": "next start -p 3210 -H 127.0.0.1",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/**/*.test.ts",

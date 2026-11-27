@@ -4,6 +4,7 @@ import {
   configuredProviders,
   samplingProfile,
 } from "@/lib/services/visibility";
+import { BodyTooLargeError, readRequestJson } from "@/lib/api/body";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,16 +22,18 @@ export const maxDuration = 60;
 export async function POST(req: Request) {
   let body: unknown;
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "请求体必须是 JSON" }, { status: 400 });
+    body = await readRequestJson(req);
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof BodyTooLargeError ? e.message : "请求体必须是 JSON" },
+      { status: e instanceof BodyTooLargeError ? 413 : 400 }
+    );
   }
 
-  const { brand, topic, competitors } = (body ?? {}) as {
-    brand?: string;
-    topic?: string;
-    competitors?: unknown;
-  };
+  const raw = (body ?? {}) as Record<string, unknown>;
+  const brand = typeof raw.brand === "string" ? raw.brand : undefined;
+  const topic = typeof raw.topic === "string" ? raw.topic : undefined;
+  const competitors = raw.competitors;
   if (!brand || !brand.trim() || !topic || !topic.trim()) {
     return NextResponse.json(
       { error: "需要提供 brand 与 topic 两个参数" },

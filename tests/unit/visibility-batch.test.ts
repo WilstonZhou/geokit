@@ -1,7 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { batchProbeVisibility } from "../../src/lib/services/visibility";
+import {
+  batchProbeVisibility,
+  batchProbeVisibilityDetailed,
+} from "../../src/lib/services/visibility";
 import type { VisibilityReport, VisibilityProbe } from "../../src/lib/visibility";
 import type { CitationRecord } from "../../src/lib/evidence/types";
 
@@ -164,5 +167,33 @@ describe("T2: batchProbeVisibility 批量探测（注入假 probe）", () => {
     const ok = probes.find((x) => x.status === "MENTIONED");
     assert.equal(ok?.citation?.citationsStatus, "ok");
     assert.equal(ok?.citation?.citations.length, 1);
+  });
+});
+
+describe("T2: batchProbeVisibilityDetailed 失败可见", () => {
+  it("成功报告按输入顺序、失败项结构化返回、空 query 计数", async () => {
+    const seen: string[] = [];
+    const result = await batchProbeVisibilityDetailed(
+      "brand1",
+      ["slow", "boom", "", "fast"],
+      2,
+      async (_brand, topic) => {
+        seen.push(topic);
+        if (topic === "boom") throw new Error("HTTP 500");
+        await new Promise((r) => setTimeout(r, topic === "slow" ? 15 : 1));
+        return { prompt: topic } as unknown as VisibilityReport;
+      }
+    );
+
+    assert.deepEqual(
+      result.reports.map((r) => r.prompt),
+      ["slow", "fast"]
+    );
+    assert.equal(result.failures.length, 1);
+    assert.equal(result.failures[0]!.topic, "boom");
+    assert.equal(result.failures[0]!.index, 1);
+    assert.match(result.failures[0]!.reason, /HTTP 500/);
+    assert.equal(result.skipped, 1);
+    assert.deepEqual(seen.sort(), ["boom", "fast", "slow"]);
   });
 });

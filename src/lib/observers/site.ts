@@ -178,7 +178,12 @@ function statusFor(ev: Evidence, html: string): ObservationStatus {
   if (s === 0) {
     // 我方限制导致的「没能观测」记 ERROR；目标不可达记 UNOBSERVABLE
     const kind = ev.error?.kind;
-    return kind === "too_large" || kind === "invalid_url" ? "ERROR" : "UNOBSERVABLE";
+    return kind === "too_large" ||
+      kind === "invalid_url" ||
+      kind === "blocked_url" ||
+      kind === "redirect_loop"
+      ? "ERROR"
+      : "UNOBSERVABLE";
   }
   if (s === 401 || s === 403 || s === 429) return "BLOCKED";
   if (s >= 500) return "ERROR";

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { auditUrl, type GeoVersion } from "@/lib/audit";
+import { BodyTooLargeError, HTML_JSON_MAX_BYTES, readRequestJson } from "@/lib/api/body";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,16 +14,18 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   let body: unknown;
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "请求体必须是 JSON" }, { status: 400 });
+    body = await readRequestJson(req, HTML_JSON_MAX_BYTES);
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof BodyTooLargeError ? e.message : "请求体必须是 JSON" },
+      { status: e instanceof BodyTooLargeError ? 413 : 400 }
+    );
   }
 
-  const { url, html, geoVersion: rawGeoVer } = (body ?? {}) as {
-    url?: string;
-    html?: string;
-    geoVersion?: string;
-  };
+  const raw = (body ?? {}) as Record<string, unknown>;
+  const url = typeof raw.url === "string" ? raw.url : undefined;
+  const html = typeof raw.html === "string" ? raw.html : undefined;
+  const rawGeoVer = raw.geoVersion;
   if (!url && !html) {
     return NextResponse.json(
       { error: "需要提供 url 或 html 其中之一" },

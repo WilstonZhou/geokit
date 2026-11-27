@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { handleJsonRpcBatch, SERVER_INFO, MCP_PROTOCOL_VERSION } from "@/lib/mcp";
+import { BodyTooLargeError, HTML_JSON_MAX_BYTES, readRequestText } from "@/lib/api/body";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,21 +13,53 @@ export const dynamic = "force-dynamic";
  *   Content-Type: application/json
  */
 export async function POST(req: Request) {
-  const raw = await req.text();
+  let raw: string;
+  try {
+    raw = await readRequestText(req, HTML_JSON_MAX_BYTES);
+  } catch (e) {
+    const status = e instanceof BodyTooLargeError ? 413 : 400;
+    return NextResponse.json(
+      {
+        jsonrpc: "2.0",
+        id: null,
+        error: {
+          code: e instanceof BodyTooLargeError ? -32600 : -32700,
+          message: e instanceof Error ? e.message : "请求体读取失败",
+        },
+      },
+      { status }
+    );
+  }
+
   if (!raw.trim()) {
     return NextResponse.json(
       { jsonrpc: "2.0", id: null, error: { code: -32600, message: "Empty request" } },
       { status: 400 }
     );
   }
-  const result = await handleJsonRpcBatch(raw);
-  if (result === null) return new Response(null, { status: 202 });
-  return NextResponse.json(result, {
-    headers: {
-      "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
-      "Cache-Control": "no-store",
-    },
-  });
+
+  try {
+    const result = await handleJsonRpcBatch(raw);
+    if (result === null) return new Response(null, { status: 202 });
+    return NextResponse.json(result, {
+      headers: {
+        "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch (e) {
+    return NextResponse.json(
+      {
+        jsonrpc: "2.0",
+        id: null,
+        error: {
+          code: -32603,
+          message: e instanceof Error ? e.message : "Internal error",
+        },
+      },
+      { status: 500 }
+    );
+  }
 }
 
 export async function GET() {

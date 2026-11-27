@@ -17,6 +17,7 @@
 import { createHash } from "node:crypto";
 
 import { acquire, DEFAULT_POLICY, type RateLimitPolicy } from "./rate-limit";
+import { assertSafeUrl, UnsafeUrlError } from "./safety";
 import { redactHeaders } from "../evidence/redact";
 
 export type FetchPurpose =
@@ -34,6 +35,8 @@ export type FetchErrorKind =
   | "http_error"
   | "too_large"
   | "invalid_url"
+  | "blocked_url"
+  | "redirect_loop"
   | "rate_limited"
   | "aborted";
 
@@ -95,6 +98,8 @@ export interface FetchResult {
   status: number;
   /** 重定向后的最终 URL */
   finalUrl: string;
+  /** 手动跟随的每一跳 URL（不含起点，含终点）；无重定向时为空数组 */
+  redirectChain?: string[];
   /** 已脱敏的响应头 */
   headers: Record<string, string>;
   body: string;
@@ -144,13 +149,66 @@ function classify(err: unknown, timedOut: boolean): FetchError {
   return { kind: "network", message: msg, retryable: false };
 }
 
+const MAX_REDIRECTS = 5;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+function isRedirect(status: number): boolean {
+  return REDIRECT_STATUSES.has(status);
+}
+
+interface LimitedBody {
+  text: string;
+  byteLength: number;
+  tooLarge: boolean;
+}
+
+/** 流式读取响应体，超过 maxBytes 立即取消，不把整个 body 读进内存。 */
+async function readBodyWithLimit(
+  res: Response,
+  maxBytes: number
+): Promise<LimitedBody> {
+  const declared = Number(res.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body?.cancel().catch(() => undefined);
+    return { text: "", byteLength: declared, tooLarge: true };
+  }
+
+  if (!res.body) return { text: "", byteLength: 0, tooLarge: false };
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return { text: "", byteLength: total, tooLarge: true };
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const buffer = Buffer.concat(chunks.map((c) => Buffer.from(c)));
+  return { text: buffer.toString("utf8"), byteLength: buffer.length, tooLarge: false };
+}
+
 /**
  * 执行一次 HTTP 请求。这是全系统唯一的 fetch 出口。
+ *
+ * 安全约束：每一跳（含初始 URL 与重定向目标）都先经过 assertSafeUrl；
+ * 响应体流式读取，超过 maxBytes 立即中断。
  */
 export async function fetchWithPolicy(req: FetchRequest): Promise<FetchResult> {
   const started = Date.now();
   const requestedAt = new Date().toISOString();
   const url = req.url;
+  const allowPrivate = process.env.GEOKIT_ALLOW_PRIVATE_URLS === "on";
 
   let parsed: URL;
   try {
@@ -159,6 +217,16 @@ export async function fetchWithPolicy(req: FetchRequest): Promise<FetchResult> {
     return failResult(req, requestedAt, Date.now() - started, {
       kind: "invalid_url",
       message: `URL 无法解析：${url}`,
+      retryable: false,
+    });
+  }
+
+  try {
+    await assertSafeUrl(parsed.toString(), { allowPrivate });
+  } catch (e) {
+    return failResult(req, requestedAt, Date.now() - started, {
+      kind: "blocked_url",
+      message: e instanceof Error ? e.message : String(e),
       retryable: false,
     });
   }
@@ -179,14 +247,6 @@ export async function fetchWithPolicy(req: FetchRequest): Promise<FetchResult> {
   let lastError: FetchError = { kind: "network", message: "未知错误", retryable: false };
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (req.rateLimit !== false) {
-      const wait = acquire(parsed.host, req.rateLimit ?? DEFAULT_POLICY);
-      if (wait > 0) {
-        await sleep(wait);
-        waitedMs += wait;
-      }
-    }
-
     const attemptStart = Date.now();
     const ctrl = new AbortController();
     let timedOut = false;
@@ -196,15 +256,107 @@ export async function fetchWithPolicy(req: FetchRequest): Promise<FetchResult> {
     }, timeoutMs);
 
     try {
-      const res = await fetch(parsed.toString(), {
-        method: req.method ?? "GET",
-        headers: requestHeaders,
-        body: req.body,
-        signal: ctrl.signal,
-        redirect: req.followRedirect === false ? "manual" : "follow",
-      });
+      let currentUrl = parsed.toString();
+      let currentMethod = req.method ?? "GET";
+      let currentBody = req.body;
+      const redirectChain: string[] = [];
+      let res: Response;
+
+      for (;;) {
+        if (req.rateLimit !== false) {
+          const wait = acquire(
+            new URL(currentUrl).host,
+            req.rateLimit ?? DEFAULT_POLICY
+          );
+          if (wait > 0) {
+            await sleep(wait);
+            waitedMs += wait;
+          }
+        }
+
+        res = await fetch(currentUrl, {
+          method: currentMethod,
+          headers: requestHeaders,
+          body: currentBody,
+          signal: ctrl.signal,
+          redirect: "manual",
+        });
+
+        if (req.followRedirect === false || !isRedirect(res.status)) break;
+
+        const location = res.headers.get("location");
+        if (!location) break;
+
+        if (redirectChain.length >= MAX_REDIRECTS) {
+          await res.body?.cancel().catch(() => undefined);
+          const err: FetchError = {
+            kind: "redirect_loop",
+            message: `重定向超过 ${MAX_REDIRECTS} 跳`,
+            retryable: false,
+          };
+          attempts.push({
+            attempt,
+            elapsedMs: Date.now() - attemptStart,
+            outcome: "error",
+            errorKind: err.kind,
+          });
+          return failResult(req, requestedAt, Date.now() - started, err, attempts, waitedMs);
+        }
+
+        let nextUrl: string;
+        try {
+          nextUrl = new URL(location, currentUrl).toString();
+        } catch {
+          await res.body?.cancel().catch(() => undefined);
+          const err: FetchError = {
+            kind: "invalid_url",
+            message: `重定向目标无法解析：${location}`,
+            retryable: false,
+          };
+          attempts.push({
+            attempt,
+            elapsedMs: Date.now() - attemptStart,
+            outcome: "error",
+            errorKind: err.kind,
+          });
+          return failResult(req, requestedAt, Date.now() - started, err, attempts, waitedMs);
+        }
+
+        try {
+          await assertSafeUrl(nextUrl, { allowPrivate });
+        } catch (e) {
+          await res.body?.cancel().catch(() => undefined);
+          const err: FetchError = {
+            kind: "blocked_url",
+            message: e instanceof Error ? e.message : String(e),
+            retryable: false,
+          };
+          attempts.push({
+            attempt,
+            elapsedMs: Date.now() - attemptStart,
+            outcome: "error",
+            errorKind: err.kind,
+          });
+          return failResult(req, requestedAt, Date.now() - started, err, attempts, waitedMs);
+        }
+
+        redirectChain.push(nextUrl);
+        await res.body?.cancel().catch(() => undefined);
+
+        // fetch 规范：303 一律改 GET；301/302 对非 GET 也改 GET；307/308 保持方法与 body
+        if (
+          res.status === 303 ||
+          ((res.status === 301 || res.status === 302) && currentMethod !== "GET")
+        ) {
+          currentMethod = "GET";
+          currentBody = undefined;
+        }
+        currentUrl = nextUrl;
+      }
 
       let raw = "";
+      let byteLength = 0;
+
       if (req.readBody === false) {
         // 只要 finalUrl —— 立即放弃流，避免下载无用的响应体
         try {
@@ -213,18 +365,23 @@ export async function fetchWithPolicy(req: FetchRequest): Promise<FetchResult> {
           /* 已不可读，忽略 */
         }
       } else {
-        raw = await res.text();
-      }
-      const byteLength = Buffer.byteLength(raw, "utf8");
-
-      if (maxBytes && byteLength > maxBytes) {
-        const err: FetchError = {
-          kind: "too_large",
-          message: `响应体 ${byteLength} 字节超过上限 ${maxBytes}`,
-          retryable: false,
-        };
-        attempts.push({ attempt, elapsedMs: Date.now() - attemptStart, outcome: "error", errorKind: err.kind });
-        return failResult(req, requestedAt, Date.now() - started, err, attempts, waitedMs);
+        const limited = await readBodyWithLimit(res, maxBytes);
+        if (limited.tooLarge) {
+          const err: FetchError = {
+            kind: "too_large",
+            message: `响应体 ${limited.byteLength} 字节超过上限 ${maxBytes}`,
+            retryable: false,
+          };
+          attempts.push({
+            attempt,
+            elapsedMs: Date.now() - attemptStart,
+            outcome: "error",
+            errorKind: err.kind,
+          });
+          return failResult(req, requestedAt, Date.now() - started, err, attempts, waitedMs);
+        }
+        raw = limited.text;
+        byteLength = limited.byteLength;
       }
 
       const isServerish = res.status >= 500 || res.status === 429;
@@ -232,7 +389,7 @@ export async function fetchWithPolicy(req: FetchRequest): Promise<FetchResult> {
         attempt,
         elapsedMs: Date.now() - attemptStart,
         outcome: res.ok ? "ok" : "error",
-        errorKind: res.ok ? undefined : isServerish ? "http_error" : "http_error",
+        errorKind: res.ok ? undefined : "http_error",
       });
 
       if (!res.ok) {
@@ -255,7 +412,8 @@ export async function fetchWithPolicy(req: FetchRequest): Promise<FetchResult> {
       return {
         ok: res.ok,
         status: res.status,
-        finalUrl: res.url || url,
+        finalUrl: res.url || currentUrl,
+        redirectChain,
         headers: redactHeaders(headers),
         body: raw,
         byteLength,
@@ -280,6 +438,13 @@ export async function fetchWithPolicy(req: FetchRequest): Promise<FetchResult> {
         error: res.ok ? undefined : lastError,
       };
     } catch (e) {
+      if (e instanceof UnsafeUrlError) {
+        return failResult(req, requestedAt, Date.now() - started, {
+          kind: "blocked_url",
+          message: e.message,
+          retryable: false,
+        }, attempts, waitedMs);
+      }
       const err = classify(e, timedOut);
       lastError = err;
       attempts.push({
@@ -319,6 +484,7 @@ function failResult(
     ok: false,
     status: 0,
     finalUrl: req.url,
+    redirectChain: [],
     headers: {},
     body: "",
     byteLength: 0,

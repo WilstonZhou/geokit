@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { handleJsonRpc } from "../../src/lib/mcp";
+import { handleJsonRpc, handleJsonRpcBatch } from "../../src/lib/mcp";
 import type { Observation } from "../../src/lib/evidence/types";
 
 async function callMcpTool(name: string, args: Record<string, unknown> = {}) {
@@ -223,5 +223,26 @@ describe("MCP Server Integration Tests", () => {
     const resHreflang = await callMcpTool("check_hreflang", { pages: "not-an-array" });
     assert.strictEqual(resHreflang.result?.isError, true);
     assert.ok(resHreflang.result?.content[0]?.text.includes("MCP 参数校验失败"));
+  });
+});
+
+describe("MCP JSON-RPC 输入健壮性", () => {
+  it("null / 数字 / 字符串不再抛 TypeError，而是 Invalid Request", async () => {
+    for (const raw of ["null", "123", '"hello"']) {
+      const res = (await handleJsonRpcBatch(raw)) as {
+        error?: { code: number };
+      };
+      assert.equal(res.error?.code, -32600, raw);
+    }
+  });
+
+  it("batch 中的 null 项被单独拒绝，其余项继续处理", async () => {
+    const res = (await handleJsonRpcBatch(
+      '[null,{"jsonrpc":"2.0","id":7,"method":"tools/list"}]'
+    )) as Array<{ id?: number; error?: { code: number }; result?: unknown }>;
+    assert.equal(res.length, 2);
+    assert.equal(res[0]!.error?.code, -32600);
+    assert.equal(res[1]!.id, 7);
+    assert.ok(res[1]!.result);
   });
 });
