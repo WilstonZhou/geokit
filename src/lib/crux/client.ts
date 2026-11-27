@@ -30,6 +30,8 @@ import type {
 
 const CRUX_ENDPOINT = "https://chromeuxreport.googleapis.com/v1/records:queryRecord";
 const DEFAULT_MIN_INTERVAL_MS = 500;
+/** 单次批量最多查询的 URL + origin 总数（付费 API 的硬保护） */
+const MAX_CRUX_TARGETS = 100;
 
 /** 单条观测原始结果（含原始 record，供 analyze 层解析） */
 export interface CruxRawObservation {
@@ -206,9 +208,12 @@ export async function batchQueryCrux(
   const targets = [
     ...urls.map((u) => ({ url: u, formFactor: input.formFactor })),
     ...origins.map((o) => ({ origin: o, formFactor: input.formFactor })),
-  ];
+  ].slice(0, MAX_CRUX_TARGETS);
 
-  const minIntervalMs = input.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS;
+  const minIntervalMs = Math.min(
+    60_000,
+    Math.max(0, input.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS)
+  );
 
   const rawObservations: CruxRawObservation[] = [];
   let truncated = false;
@@ -271,9 +276,12 @@ export async function batchQueryCruxRaw(
   const targets = [
     ...urls.map((u) => ({ url: u, formFactor: input.formFactor })),
     ...origins.map((o) => ({ origin: o, formFactor: input.formFactor })),
-  ];
+  ].slice(0, MAX_CRUX_TARGETS);
 
-  const minIntervalMs = input.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS;
+  const minIntervalMs = Math.min(
+    60_000,
+    Math.max(0, input.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS)
+  );
 
   const rawObservations: CruxRawObservation[] = [];
   let truncated = false;

@@ -16,7 +16,10 @@ export interface ParsedSitemap {
   sitemapIndexUrls: string[];
 }
 
-const LOC_RE = /<(?:[\w.-]+:)?loc>([\s\S]*?)<\/(?:[\w.-]+:)?loc>/gi;
+// 只取页面/子 sitemap 的 <loc>，排除 image:loc / video:loc / news:loc 等扩展。
+// 否则图片 URL 会被当作页面 URL 消耗爬虫预算。
+const LOC_RE =
+  /<(?!image:|video:|news:|xhtml:)(?:[\w.-]+:)?loc>([\s\S]*?)<\/(?!image:|video:|news:|xhtml:)(?:[\w.-]+:)?loc>/gi;
 const ROOT_URLSET_RE = /<[^>]*urlset[\s>]/i;
 const ROOT_INDEX_RE = /<[^>]*sitemapindex[\s>]/i;
 

@@ -79,6 +79,43 @@ describe("crawler/robots", () => {
       assert.strictEqual(r.allowed, true);
     });
 
+    it("支持通配符 * 与结尾锚定 $", () => {
+      const p = parseRobots("User-agent: *\nDisallow: /*.pdf$");
+      assert.strictEqual(allowedByRobots(p, "/file.pdf", "GEOkitBot").allowed, false);
+      assert.strictEqual(
+        allowedByRobots(p, "/file.pdf?download=1", "GEOkitBot").allowed,
+        true
+      );
+      assert.strictEqual(
+        allowedByRobots(p, "/file.pdf.html", "GEOkitBot").allowed,
+        true
+      );
+    });
+
+    it("支持路径中间通配符", () => {
+      const p = parseRobots("User-agent: *\nDisallow: /tmp/*/x");
+      assert.strictEqual(
+        allowedByRobots(p, "/tmp/a/x", "GEOkitBot").allowed,
+        false
+      );
+      assert.strictEqual(
+        allowedByRobots(p, "/tmp/a/y", "GEOkitBot").allowed,
+        true
+      );
+    });
+
+    it("query 参与匹配（/search?q=）", () => {
+      const p = parseRobots("User-agent: *\nDisallow: /search?q=");
+      assert.strictEqual(
+        allowedByRobots(p, "/search?q=geo", "GEOkitBot").allowed,
+        false
+      );
+      assert.strictEqual(
+        allowedByRobots(p, "/search/result", "GEOkitBot").allowed,
+        true
+      );
+    });
+
     it("精确 UA 组优先于通配组", () => {
       const txt = [
         "User-agent: GEOkitBot",

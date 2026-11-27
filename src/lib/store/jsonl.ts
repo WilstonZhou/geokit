@@ -96,6 +96,7 @@ import { randomUUID } from "node:crypto";
 import type { Evidence, Observation } from "../evidence/types";
 import { normalizeEvidence } from "../evidence/normalize";
 import { keyOf } from "./hash";
+import { canonicalIso, cmpIso } from "./time";
 import type {
   EvidenceQuery,
   ListOptions,
@@ -117,10 +118,6 @@ function clone<T>(v: T): T {
 function dayOf(iso: string): string {
   const t = Date.parse(iso);
   return (Number.isFinite(t) ? new Date(t) : new Date()).toISOString().slice(0, 10);
-}
-
-function cmpIso(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 export class JsonlStore implements Store {
@@ -211,6 +208,7 @@ export class JsonlStore implements Store {
     }
 
     const record = clone(ev);
+    record.observedAt = canonicalIso(record.observedAt);
     record.dedupeKey = dedupeKey;
 
     if (opts?.body && record.response.bodyRetained) {
@@ -291,6 +289,7 @@ export class JsonlStore implements Store {
       const next: Observation = {
         ...clone(obs),
         id: prev.id,
+        observedAt: canonicalIso(obs.observedAt),
         identityKey,
         versionKey,
         replaces: prev.replaces,
@@ -324,6 +323,7 @@ export class JsonlStore implements Store {
     const next: Observation = {
       ...clone(obs),
       id,
+      observedAt: canonicalIso(obs.observedAt),
       identityKey,
       versionKey,
       metadata: opts?.idempotencyKey

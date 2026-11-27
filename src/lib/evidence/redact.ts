@@ -81,6 +81,11 @@ export function redactHeaders(headers: Record<string, string>): Record<string, s
 export function redactUrl(rawUrl: string): string {
   try {
     const u = new URL(rawUrl);
+    // URL 内嵌凭据（https://user:pass@host）也必须脱敏
+    if (u.username || u.password) {
+      u.username = REDACTED;
+      u.password = "";
+    }
     const sensitive = ["key", "api_key", "apikey", "access_token", "token", "sig", "signature"];
     for (const name of u.searchParams.keys()) {
       if (sensitive.includes(name.toLowerCase()) || NAME_HINTS.test(name)) {

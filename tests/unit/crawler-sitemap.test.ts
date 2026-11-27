@@ -86,6 +86,17 @@ describe("crawler/sitemap", () => {
       const r = parseSitemapXml(xml);
       assert.strictEqual(r.urls.length, 1);
     });
+
+    it("不把 image:loc 当作页面 URL", () => {
+      const xml = `<urlset xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+        <url>
+          <loc>https://example.com/page</loc>
+          <image:loc>https://cdn.example.com/photo.jpg</image:loc>
+        </url>
+      </urlset>`;
+      const r = parseSitemapXml(xml);
+      assert.deepEqual(r.urls, ["https://example.com/page"]);
+    });
   });
 
   describe("discoverSitemaps", () => {

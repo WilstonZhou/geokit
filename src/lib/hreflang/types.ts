@@ -119,19 +119,25 @@ export const VALID_LANG_CODES = new Set([
 
 /** 语言代码合法性检查（宽松：结构合法即可，不强制枚举） */
 export function isValidLangCode(code: string): boolean {
-  if (code === "x-default") return true;
-  // BCP 47 简化：2-3 字母语言码 + 可选 2 字母地区码
-  return /^[a-z]{2,3}(-[A-Z]{2})?$/i.test(code);
+  const c = code.trim();
+  if (c.toLowerCase() === "x-default") return true;
+  // BCP 47 简化：语言码（2-3 字母）+ 可选 script（4 字母）+ 可选地区（2 字母或 3 数字）
+  return /^[a-z]{2,3}(-[a-z]{4})?(-(?:[a-z]{2}|\d{3}))?$/i.test(c);
 }
 
-/** 语言代码规范化（小写-大写） */
+/** 语言代码规范化（语言小写、script 首字母大写、地区大写；x-default 小写） */
 export function normalizeLangCode(code: string): string {
-  if (code === "x-default") return code;
-  const parts = code.split("-");
-  if (parts.length === 2) {
-    return `${parts[0].toLowerCase()}-${parts[1].toUpperCase()}`;
-  }
-  return code.toLowerCase();
+  if (code.trim().toLowerCase() === "x-default") return "x-default";
+  const parts = code.trim().split("-");
+  return parts
+    .map((part, index) => {
+      if (index === 0) return part.toLowerCase();
+      if (/^[a-z]{4}$/i.test(part)) {
+        return part[0]!.toUpperCase() + part.slice(1).toLowerCase();
+      }
+      return part.toUpperCase();
+    })
+    .join("-");
 }
 
 /** 从 URL 提取语言路径前缀（如 /zh-CN/、/en/） */

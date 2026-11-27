@@ -54,6 +54,13 @@ function aggregateAi(
 ): AiAggregate {
   const targetDomain = normDomain(domain);
   const targetBrand = brandOrDomain.toLowerCase().trim();
+  // 竞品常以域名传入（stripe.com），但 AI 回答里写的是品牌名（Stripe）。
+  // 额外接受域名主体作为品牌候选，避免 mentionCount 恒为 0。
+  const brandCandidates = new Set<string>([targetBrand]);
+  if (targetBrand.includes(".")) {
+    const root = targetBrand.split(".")[0];
+    if (root) brandCandidates.add(root);
+  }
 
   let mentionCount = 0;
   let citationCount = 0;
@@ -71,10 +78,14 @@ function aggregateAi(
     if (isUser) {
       mentioned = r.mentioned;
     } else {
-      // 竞品：检查 competitorsMentioned 是否包含该域名/品牌
-      mentioned = (r.competitorsMentioned ?? []).some(
-        (c) => c.toLowerCase().trim() === targetBrand || normDomain(c) === targetDomain
-      );
+      // 竞品：检查 competitorsMentioned 是否包含该域名/品牌/品牌主体
+      mentioned = (r.competitorsMentioned ?? []).some((c) => {
+        const norm = c.toLowerCase().trim();
+        return (
+          brandCandidates.has(norm) ||
+          normDomain(c) === targetDomain
+        );
+      });
     }
     if (mentioned) {
       mentionCount++;

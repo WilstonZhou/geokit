@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import { absolutize } from "../html";
 import type { CrawlResult, CrawlPage } from "./types";
 import { jaccardSimilarity } from "./content";
+import { normalizeCrawlUrl } from "./normalize";
 
 /* ------------------------------------------------------------------ */
 /* 阈值常量 —— 规则透明可读，测试直接断言                                */
@@ -339,7 +340,8 @@ function findCanonicalAnomalies(result: CrawlResult, pages: CrawlPage[]): SiteIs
       continue;
     }
 
-    const target = byUrl.get(canonAbs);
+    // canonical 常见写法带/不带尾斜杠；与爬取 URL 的归一化口径保持一致
+    const target = byUrl.get(normalizeCrawlUrl(canonAbs));
     if (target && target.httpStatus >= 400) {
       reason = "canonical 指向 4xx/5xx 页面";
       evidence.push({ fact: "目标状态码", value: target.httpStatus });

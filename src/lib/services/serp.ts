@@ -60,7 +60,10 @@ export function resolveEngineIds(
   engines?: EngineId[]
 ): EngineId[] {
   if (Array.isArray(engines) && engines.length > 0) {
-    return engines.filter((e) => ENGINE_LIST.some((x) => x.id === e));
+    // 去重 + 只保留已知引擎：重复的 engines 会放大为重复抓取（N 倍）
+    return Array.from(
+      new Set(engines.filter((e) => ENGINE_LIST.some((x) => x.id === e)))
+    );
   }
   if (group === "global") return GLOBAL_ENGINES;
   if (group === "all") return [...CN_ENGINES, ...GLOBAL_ENGINES];

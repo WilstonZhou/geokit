@@ -48,7 +48,9 @@ export function identifyCompetitors(
       // 同一 SERP 内同域名去重（避免一页多结果重复计数）
       const seenInThisSerp = new Set<string>();
       for (const item of serp.items) {
-        const d = (item.domain || "").toLowerCase();
+        // 与 AI 引用侧统一用 getDomain 归一化，否则 www.example.com
+        // 不会被当作自家域名排除，同一站还会拆成两条竞品。
+        const d = item.domain ? getDomain(item.domain).toLowerCase() : "";
         if (!d || seenInThisSerp.has(d)) continue;
         seenInThisSerp.add(d);
         if (userDom && d === userDom) continue;

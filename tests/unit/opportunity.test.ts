@@ -245,7 +245,7 @@ describe("T6-3 ai-crawl-protocol", () => {
     const out = genAiCrawlProtocol(undefined, llms);
     assert.strictEqual(out.length, 1);
     assert.strictEqual(out[0].impact, "medium");
-    assert.strictEqual(out[0].verification.signalKey, "llmsTxt.exists");
+    assert.strictEqual(out[0].verification.signalKey, "exists");
     assert.strictEqual(out[0].verification.direction, "appear");
   });
 
@@ -295,6 +295,9 @@ describe("T6-4 site-issue-high", () => {
     assert.strictEqual(out[0].impact, "high");
     assert.strictEqual(out[0].affectedScope, 2);
     assert.strictEqual(out[0].verification.direction, "disappear");
+    assert.strictEqual(out[0].verification.signalKey, "issuePresent");
+    assert.strictEqual(out[0].verification.issueId, "x:1");
+    assert.strictEqual(out[0].verification.issueType, "missing-title");
   });
 
   test("不命中：只有 medium/low severity", () => {
@@ -387,6 +390,8 @@ describe("T6-6 missing-entity", () => {
     assert.strictEqual(out[0].type, "missing-entity");
     assert.strictEqual(out[0].impact, "medium"); // 缺 Schema → medium
     assert.ok(out[0].recommendations.length >= 4);
+    assert.strictEqual(out[0].verification.signalKey, "missingEntityCount");
+    assert.strictEqual(out[0].verification.direction, "decrease");
   });
 
   test("不命中：页面实体齐全", () => {
@@ -607,6 +612,95 @@ describe("T6-9 verifyOpportunity", () => {
   });
 });
 
+describe("T6-9b verifyOpportunity 与真实 Observation 结构对齐", () => {
+  function opWith(
+    type: Opportunity["type"],
+    target: string,
+    verification: Opportunity["verification"]
+  ): Opportunity {
+    return {
+      id: "x",
+      type,
+      target,
+      impact: "medium",
+      effort: "low",
+      diagnosis: { summary: "x", evidence: [] },
+      recommendations: [{ action: "x" }],
+      sources: [],
+      verification,
+      affectedScope: 1,
+    };
+  }
+
+  test("llms_txt：exists 为顶层字段（不是 llmsTxt.exists）", () => {
+    const op = opWith("ai-crawl-protocol", "https://example.com", {
+      signalKey: "exists",
+      direction: "appear",
+      description: "llms.txt 出现",
+    });
+    const prev = [makeObservation("site:https://example.com", "2026-10-01T00:00:00Z", { exists: false })];
+    const curr = [makeObservation("site:https://example.com", "2026-10-08T00:00:00Z", { exists: true })];
+    assert.strictEqual(verifyOpportunity(op, prev, curr), "resolved");
+  });
+
+  test("CrUX：overallCategory 分类值可比较（SLOW → FAST）", () => {
+    const op = opWith("poor-web-vitals", "https://example.com/a", {
+      signalKey: "overallCategory",
+      direction: "increase",
+      description: "绩效提升",
+    });
+    const prev = [makeObservation("crux:https://example.com/a", "2026-10-01T00:00:00Z", { overallCategory: "SLOW" })];
+    const curr = [makeObservation("crux:https://example.com/a", "2026-10-08T00:00:00Z", { overallCategory: "FAST" })];
+    assert.strictEqual(verifyOpportunity(op, prev, curr), "resolved");
+  });
+
+  test("GSC：从 topRows 按 query 读取 ctr", () => {
+    const op = opWith("search-opportunity", "跨境支付", {
+      signalKey: "ctr",
+      direction: "increase",
+      description: "CTR 提升",
+    });
+    const prev = [makeObservation("gsc:https://example.com", "2026-10-01T00:00:00Z", {
+      topRows: [{ keys: ["跨境支付"], ctr: 0.01, position: 8 }],
+    })];
+    const curr = [makeObservation("gsc:https://example.com", "2026-10-08T00:00:00Z", {
+      topRows: [{ keys: ["跨境支付"], ctr: 0.03, position: 6 }],
+    })];
+    assert.strictEqual(verifyOpportunity(op, prev, curr), "resolved");
+  });
+
+  test("citation-gap：按 verificationTarget 检查用户域名是否出现在 citedDomains", () => {
+    const op = opWith("citation-gap", "rival.com", {
+      signalKey: "citedDomains",
+      direction: "appear",
+      verificationTarget: "example.com",
+      description: "用户域名被引用",
+    });
+    const prev = [makeObservation("ai-slot:deepseek:deepseek-chat", "2026-10-01T00:00:00Z", {
+      citedDomains: ["rival.com"],
+    })];
+    const curr = [makeObservation("ai-slot:deepseek:deepseek-chat", "2026-10-08T00:00:00Z", {
+      citedDomains: ["rival.com", "example.com"],
+    })];
+    assert.strictEqual(verifyOpportunity(op, prev, curr), "resolved");
+  });
+
+  test("content-gap：pageInCrawl 从 crawl Observation 的 pages 判断", () => {
+    const op = opWith("search-opportunity", "https://example.com/missing", {
+      signalKey: "pageInCrawl",
+      direction: "appear",
+      description: "页面进入爬取集合",
+    });
+    const prev = [makeObservation("site:https://example.com", "2026-10-01T00:00:00Z", {
+      pages: [{ url: "https://example.com/other", finalUrl: "https://example.com/other" }],
+    })];
+    const curr = [makeObservation("site:https://example.com", "2026-10-08T00:00:00Z", {
+      pages: [{ url: "https://example.com/missing", finalUrl: "https://example.com/missing" }],
+    })];
+    assert.strictEqual(verifyOpportunity(op, prev, curr), "resolved");
+  });
+});
+
 /* ------------------------------------------------------------------ */
 /* 10. rankOpportunities + mergeByTarget 单元                         */
 /* ------------------------------------------------------------------ */
@@ -673,5 +767,107 @@ describe("T6-10 rankOpportunities 单元", () => {
     ];
     const ranked = rankOpportunities(list);
     assert.strictEqual(ranked[0].id, "b");
+  });
+});
+
+describe("T6-9c verifyOpportunity 实体 / 站点问题 / manual", () => {
+  function opWith(
+    target: string,
+    verification: Opportunity["verification"],
+    type: Opportunity["type"] = "missing-entity"
+  ): Opportunity {
+    return {
+      id: "x",
+      type,
+      target,
+      impact: "medium",
+      effort: "low",
+      diagnosis: { summary: "x", evidence: [] },
+      recommendations: [{ action: "x" }],
+      sources: [],
+      verification,
+      affectedScope: 1,
+    };
+  }
+
+  test("missingEntityCount：缺失数降到 0 → resolved", () => {
+    const op = opWith("https://example.com/a", {
+      signalKey: "missingEntityCount",
+      direction: "decrease",
+      description: "实体补全",
+    });
+    const prev = [makeObservation("site:https://example.com/a", "2026-10-01T00:00:00Z", {
+      jsonLdTypes: [],
+      wordCount: 500,
+      ogTags: {},
+    })];
+    const curr = [makeObservation("site:https://example.com/a", "2026-10-08T00:00:00Z", {
+      jsonLdTypes: ["Article"],
+      wordCount: 500,
+      ogTags: { "article:author": "张三", "og:site_name": "Example", "article:published_time": "2026-01-01" },
+    })];
+    assert.strictEqual(verifyOpportunity(op, prev, curr), "resolved");
+  });
+
+  test("issuePresent：按 issueId 判断站点问题消失 → resolved", () => {
+    const op = opWith(
+      "https://example.com/a",
+      {
+        signalKey: "issuePresent",
+        direction: "disappear",
+        issueId: "x:1",
+        issueType: "missing-title",
+        description: "问题消失",
+      },
+      "site-issue-high"
+    );
+    const prev = [makeObservation("site:https://example.com", "2026-10-01T00:00:00Z", {
+      issues: [{ id: "x:1", type: "missing-title", affectedUrls: ["https://example.com/a"] }],
+      pages: [{ url: "https://example.com/a" }],
+    })];
+    const curr = [makeObservation("site:https://example.com", "2026-10-08T00:00:00Z", {
+      issues: [],
+      pages: [{ url: "https://example.com/a" }],
+    })];
+    assert.strictEqual(verifyOpportunity(op, prev, curr), "resolved");
+  });
+
+  test("issuePresent：受影响集合变化导致 issue id 变化，但 target 仍受影响 → unchanged", () => {
+    const op = opWith(
+      "https://example.com/a",
+      {
+        signalKey: "issuePresent",
+        direction: "disappear",
+        issueId: "x:1",
+        issueType: "missing-title",
+        description: "问题消失",
+      },
+      "site-issue-high"
+    );
+    const prev = [makeObservation("site:https://example.com", "2026-10-01T00:00:00Z", {
+      issues: [{ id: "x:1", type: "missing-title", affectedUrls: ["https://example.com/a", "https://example.com/b"] }],
+      pages: [{ url: "https://example.com/a" }],
+    })];
+    const curr = [makeObservation("site:https://example.com", "2026-10-08T00:00:00Z", {
+      issues: [{ id: "x:2", type: "missing-title", affectedUrls: ["https://example.com/a"] }],
+      pages: [{ url: "https://example.com/a" }],
+    })];
+    assert.strictEqual(verifyOpportunity(op, prev, curr), "unchanged");
+  });
+
+  test("manual 复检返回 unknown，不伪造 resolved", () => {
+    const op = opWith(
+      "https://example.com/a",
+      {
+        signalKey: "schemaMissingRequiredCount",
+        direction: "decrease",
+        manual: true,
+        description: "人工复检",
+      },
+      "schema-issue"
+    );
+    const prev = [makeObservation("site:https://example.com/a", "2026-10-01T00:00:00Z", { schemaMissingRequiredCount: 3 })];
+    const curr = [makeObservation("site:https://example.com/a", "2026-10-08T00:00:00Z", { schemaMissingRequiredCount: 0 })];
+    assert.strictEqual(verifyOpportunity(op, prev, curr), "unknown");
   });
 });

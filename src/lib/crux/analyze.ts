@@ -49,6 +49,9 @@ export function evaluateMetric(
   data: { histogram: { start: number; end?: number; density: number }[]; percentiles: { p75: number | string } }
 ): MetricEvaluation {
   const thresholds = CWV_THRESHOLDS[metric];
+  if (!thresholds) {
+    throw new Error(`未知的 CrUX 指标：${metric}`);
+  }
   // CLS 的 p75 可能是字符串（如 "0.10"），需转换
   const p75 = typeof data.percentiles.p75 === "string" ? parseFloat(data.percentiles.p75) : data.percentiles.p75;
 
@@ -98,10 +101,12 @@ export function analyzeCruxObservation(raw: CruxRawObservation): CruxObservation
   const metrics: MetricEvaluation[] = [];
   const recordMetrics = raw.record.metrics;
 
-  for (const metricName of Object.keys(recordMetrics) as CruxMetricName[]) {
-    const data = recordMetrics[metricName];
+  for (const metricName of Object.keys(recordMetrics)) {
+    // API 新增指标时不要让整次分析抛 TypeError：只评估已知的 5 项
+    if (!(metricName in CWV_THRESHOLDS)) continue;
+    const data = recordMetrics[metricName as CruxMetricName];
     if (!data) continue;
-    metrics.push(evaluateMetric(metricName, data));
+    metrics.push(evaluateMetric(metricName as CruxMetricName, data));
   }
 
   // 整体评级：任一指标为 poor → SLOW；任一 ni → AVERAGE；全 good → FAST

@@ -18,9 +18,25 @@ import type { Fetcher } from "./types";
  * 返回 `{ allowed, rule }`：rule 为命中的规则原文（如 "Disallow: /private"），
  * 没有命中任何规则时 allowed=true、rule=null。
  *
- * 路径匹配采用前缀匹配：rule.path 为空字符串或 "/" 视为匹配所有路径；
- * 否则 urlPath 必须以 rule.path 开头才算命中。
+ * 路径匹配遵循 RFC 9309 + 主流搜索引擎扩展：
+ *   - 前缀匹配；
+ *   - `*` 匹配任意字符序列；
+ *   - 末尾 `$` 锚定路径结尾；
+ *   - 同长度时 Allow 胜出。
  */
+export function robotsPatternMatches(pattern: string, path: string): boolean {
+  if (!pattern) return false;
+  if (pattern === "/") return true;
+
+  const anchored = pattern.endsWith("$");
+  const body = anchored ? pattern.slice(0, -1) : pattern;
+  const escaped = body
+    .split("*")
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join(".*");
+  return new RegExp(`^${escaped}${anchored ? "$" : ""}`).test(path);
+}
+
 export function allowedByRobots(
   parsed: ParsedRobots,
   urlPath: string,
@@ -50,8 +66,7 @@ export function allowedByRobots(
       // 与 llms.ts policyForAgent 的行为一致
       const rulePath = r.path;
       if (!rulePath) continue;
-      const matches = rulePath === "/" || path.startsWith(rulePath);
-      if (!matches) continue;
+      if (!robotsPatternMatches(rulePath, path)) continue;
       const len = rulePath.length;
       if (len > bestLen || (len === bestLen && r.allow && best && !best.allow)) {
         best = r;

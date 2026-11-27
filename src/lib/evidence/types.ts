@@ -366,6 +366,12 @@ export interface CitationRecord {
   citations: { url: string; title?: string; position?: number }[];
   citationsStatus: ObservationStatus;
   competitorsMentioned: string[];
+  /**
+   * 本次回答是否足以判定“有没有提及”。
+   * false = 模型拒答/低信号：mentioned 字段不可作为 NOT_MENTIONED 使用。
+   * 缺省视为 true（历史记录）。
+   */
+  determinable?: boolean;
   observedAt: string;
 }
 

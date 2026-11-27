@@ -65,15 +65,14 @@ function determineGeoStatus(audits: GeoAuditSource[]): CompetitorStatus {
   return "blocked";
 }
 
-/** GEO 维度 gap（分数越高越好） */
+/** GEO 维度 gap（分数越高越好）。0 分是合法的真实观测值，不能当“无数据”。 */
 function determineGeoGap(
   userScore: number | null,
   compScores: (number | null)[]
 ): "behind" | "ahead" | "parity" | "incomparable" {
   const validComps = compScores.filter((v): v is number => v !== null);
-  if ((userScore === null || userScore === 0) && validComps.length === 0) return "incomparable";
-  if (userScore === null || userScore === 0) return "behind";
-  if (validComps.length === 0) return "ahead";
+  // 用户或竞品缺少可用观测 → 无法对比；不要把“没数据”包装成 ahead/behind
+  if (userScore === null || validComps.length === 0) return "incomparable";
   if (validComps.some((c) => c > userScore)) return "behind";
   if (validComps.some((c) => c < userScore)) return "ahead";
   return "parity";
@@ -116,9 +115,11 @@ export async function compareGeoScores(
   }
 
   // 用户值
-  const userScore = userAudits.length > 0 ? averageScore(userAudits) : null;
-  const userStatus: CompetitorStatus = userAudits.length > 0 ? determineGeoStatus(userAudits) : "unavailable";
-  const userBreakdown = userAudits.length > 0 ? averageBreakdown(userAudits) : [];
+  const userStatus: CompetitorStatus =
+    userAudits.length > 0 ? determineGeoStatus(userAudits) : "unavailable";
+  // 只有 status=available 时平均分才是有效观测；全部 blocked 时 0 不是“得了 0 分”
+  const userScore = userStatus === "available" ? averageScore(userAudits) : null;
+  const userBreakdown = userStatus === "available" ? averageBreakdown(userAudits) : [];
   const userEvidence: CompetitorEvidence[] = userAudits.length > 0
     ? [
         { signal: "geo.averageScore", source: "PageAudit[]", value: userScore ?? 0 },
@@ -140,13 +141,19 @@ export async function compareGeoScores(
     const score = averageScore(compAudits);
     const breakdown = averageBreakdown(compAudits);
     const status = determineGeoStatus(compAudits);
+    const usableCount = compAudits.filter(isUsableAudit).length;
     return {
       domain: comp,
-      value: { averageScore: score, pagesAudited: compAudits.filter(isUsableAudit).length, breakdown },
+      value:
+        status === "available"
+          ? { averageScore: score, pagesAudited: usableCount, breakdown }
+          : null,
       status,
+      statusReason:
+        status === "available" ? undefined : "竞品页面均不可用（blocked/抓取失败）",
       evidence: [
         { signal: "geo.averageScore", source: `PageAudit[] (${comp})`, value: score },
-        { signal: "geo.pagesAudited", source: `PageAudit[] (${comp})`, value: compAudits.filter(isUsableAudit).length },
+        { signal: "geo.pagesAudited", source: `PageAudit[] (${comp})`, value: usableCount },
       ],
     };
   });
@@ -154,20 +161,26 @@ export async function compareGeoScores(
   const compScores = competitorValues.map((c) =>
     c.value && c.status === "available" ? c.value.averageScore : null
   );
+  const validCompScores = compScores.filter((v): v is number => v !== null);
   const gap = determineGeoGap(userScore, compScores);
 
   let summary: string;
-  if (gap === "incomparable") {
-    summary = "用户与竞品均无 GEO 评分数据。";
-  } else if (userStatus === "unavailable") {
-    summary = "未提供用户页面审计数据，无法对比 GEO 评分。";
+  if (userStatus !== "available") {
+    summary = "未提供用户可用的页面审计数据，无法对比 GEO 评分。";
+  } else if (validCompScores.length === 0) {
+    summary = "竞品没有可用的 GEO 评分数据，无法对比。";
   } else if (gap === "behind") {
     const leaders = competitorValues
-      .filter((c) => c.value && (userScore ?? 0) < c.value.averageScore)
+      .filter(
+        (c) =>
+          c.status === "available" &&
+          c.value &&
+          (userScore ?? 0) < c.value.averageScore
+      )
       .map((c) => `${c.domain}(${c.value!.averageScore})`);
     summary = `用户 GEO 均分 ${userScore}，落后：${leaders.join("、")}`;
   } else if (gap === "ahead") {
-    summary = `用户 GEO 均分 ${userScore}，领先全部竞品。`;
+    summary = `用户 GEO 均分 ${userScore}，领先所有有数据的竞品。`;
   } else {
     summary = `用户 GEO 均分 ${userScore}，与竞品持平。`;
   }
@@ -191,11 +204,21 @@ export async function compareGeoScores(
 
   return {
     dimension: "geo",
-    userValue: userAudits.length > 0
-      ? { averageScore: userScore ?? 0, pagesAudited: userAudits.filter(isUsableAudit).length, breakdown: userBreakdown }
-      : null,
+    userValue:
+      userStatus === "available" && userScore !== null
+        ? {
+            averageScore: userScore,
+            pagesAudited: userAudits.filter(isUsableAudit).length,
+            breakdown: userBreakdown,
+          }
+        : null,
     userStatus,
-    userStatusReason: userStatus === "unavailable" ? "未提供用户页面审计数据" : undefined,
+    userStatusReason:
+      userStatus === "unavailable"
+        ? "未提供用户页面审计数据"
+        : userStatus === "blocked"
+          ? "用户页面均不可用（blocked/抓取失败）"
+          : undefined,
     userEvidence,
     competitorValues,
     summary,

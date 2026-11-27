@@ -329,3 +329,65 @@ test("analyzeCompetitors: 全部缺数据 → 全 unavailable", async () => {
   }
   assert.strictEqual(report.gaps.length, 0);
 });
+
+// ── 回归：0 分 / 无数据 / 部分观测不能产出假结论 ──
+
+test("compareGeoScores: 用户与竞品都是真实 0 分 → parity（不是 behind）", async () => {
+  const dim = await compareGeoScores("example.com", ["rival.com"], {
+    userAudits: [makeGeoSource("https://example.com/a", 0)],
+    competitorAudits: [{ domain: "rival.com", audits: [makeGeoSource("https://rival.com/a", 0)] }],
+  });
+  assert.strictEqual(dim.userStatus, "available");
+  assert.strictEqual(dim.userValue!.averageScore, 0);
+  assert.strictEqual(dim.gap, "parity");
+  assert.doesNotMatch(dim.summary, /落后：$/);
+});
+
+test("compareGeoScores: 用户 0 分、竞品无数据 → incomparable（不是 behind）", async () => {
+  const dim = await compareGeoScores("example.com", ["rival.com"], {
+    userAudits: [makeGeoSource("https://example.com/a", 0)],
+  });
+  assert.strictEqual(dim.gap, "incomparable");
+  assert.match(dim.summary, /竞品没有可用/);
+});
+
+test("compareGeoScores: 全部 blocked → value=null 且 incomparable", async () => {
+  const dim = await compareGeoScores("example.com", ["rival.com"], {
+    userAudits: [makeGeoSource("https://example.com/a", 0, 403)],
+    competitorAudits: [{ domain: "rival.com", audits: [makeGeoSource("https://rival.com/a", 0, 403)] }],
+  });
+  assert.strictEqual(dim.userStatus, "blocked");
+  assert.strictEqual(dim.userValue, null);
+  assert.strictEqual(dim.gap, "incomparable");
+});
+
+test("compareStructuredData: 竞品 unavailable 不能按 0 种类型算成 ahead", () => {
+  const dim = compareStructuredData(
+    [{ jsonLdTypes: ["Article"] }],
+    [{ domain: "rival.com", sources: [] }]
+  );
+  assert.strictEqual(dim.competitorValues[0]!.status, "unavailable");
+  assert.strictEqual(dim.competitorValues[0]!.value, null);
+  assert.strictEqual(dim.gap, "incomparable");
+  assert.doesNotMatch(dim.summary, /领先/);
+});
+
+test("compareAiCrawlProtocol: 只观测到 robots 时不能补 0/false 下结论", async () => {
+  const dim = await compareAiCrawlProtocol("example.com", ["rival.com"], {
+    userRobots: makeRobots(80),
+    competitorRobots: [{ domain: "rival.com", analysis: makeRobots(70) }],
+    competitorLlmsTxt: [{ domain: "rival.com", analysis: makeLlmsTxt(true, 70) }],
+  });
+  assert.strictEqual(dim.userStatus, "unavailable");
+  assert.strictEqual(dim.userValue, null);
+  assert.strictEqual(dim.gap, "incomparable");
+  assert.doesNotMatch(dim.summary, /无 llms\.txt/);
+});
+
+test("compareAiMentions: 竞品以域名传入、AI 回答写品牌名也能命中", () => {
+  const records = [
+    makeCitation("gpt-4o", false, [{ url: "https://stripe.com/a", position: 1 }], ["Stripe"]),
+  ];
+  const dim = compareAiMentions(records, "example.com", ["stripe.com"]);
+  assert.strictEqual(dim.competitorValues[0]!.value!.mentionCount, 1);
+});

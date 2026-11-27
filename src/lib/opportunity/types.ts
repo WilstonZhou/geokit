@@ -91,6 +91,25 @@ export interface Recommendation {
 export interface Verification {
   signalKey: string;
   direction: "increase" | "decrease" | "appear" | "disappear";
+  /**
+   * 复检时应该匹配的观测对象。缺省用 opportunity.target。
+   *
+   * citation-gap 的 target 是竞品域名（用于描述缺口），但复检要看的是
+   * 用户域名是否开始被引用，故需要单独指定。
+   */
+  verificationTarget?: string;
+  /**
+   * 站点问题的稳定 id（crawler SiteIssue.id）。
+   * signalKey="issuePresent" 时用它判断同一条问题是否仍然存在。
+   */
+  issueId?: string;
+  /** 站点问题类型（IssueType）；优先与 target 一起判断，避免 id 随受影响集合变化而误判 */
+  issueType?: string;
+  /**
+   * 当前没有对应 Observation 数据源，只能人工复检。
+   * verifyOpportunity 对这类机会返回 unknown，而不是伪造结论。
+   */
+  manual?: boolean;
   /** 人可读的期望描述，如「下次复检时 geoScore 应升至 60+」 */
   description: string;
 }

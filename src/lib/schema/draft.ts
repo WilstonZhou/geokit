@@ -95,14 +95,19 @@ class Builder {
     this.json["@type"] = type;
   }
 
-  private has(path: string): boolean {
+  private read(path: string): unknown {
     const parts = path.split(".");
     let cur: unknown = this.json;
     for (const p of parts) {
-      if (cur === null || typeof cur !== "object") return false;
+      if (cur === null || typeof cur !== "object") return undefined;
       cur = (cur as Record<string, unknown>)[p];
       if (Array.isArray(cur)) cur = cur[0];
     }
+    return cur;
+  }
+
+  private has(path: string): boolean {
+    const cur = this.read(path);
     return cur !== undefined && cur !== null && cur !== "";
   }
 
@@ -111,9 +116,14 @@ class Builder {
     if (value === undefined || value === null || value === "") return false;
     if (Array.isArray(value) && value.length === 0) return false;
     if (this.has(path)) {
-      // 已有值（来自现存 JSON-LD）也记录，但不覆盖
+      // 已有值（来自现存 JSON-LD）也记录，但不覆盖。
+      // 注意记录的是**草稿里真实保留的值**，不是被拒绝的候选值。
       this.filledFields.push(path);
-      this.sourcedFrom.push({ field: path, source: "jsonld-existing", value: preview(value) });
+      this.sourcedFrom.push({
+        field: path,
+        source: "jsonld-existing",
+        value: preview(this.read(path)),
+      });
       return false;
     }
     const parts = path.split(".");

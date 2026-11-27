@@ -35,42 +35,70 @@ function crawlToSchemaSources(crawl: CrawlResult): { jsonLdTypes: string[] }[] {
   return crawl.pages.map((p) => ({ jsonLdTypes: p.jsonLdTypes ?? [] }));
 }
 
+/**
+ * 输入硬上限。
+ *
+ * 竞品维度的现场抓取是 `Promise.all`：调用方传几千个 URL 会同时发起几千个
+ * 请求。这里在业务入口统一收口，HTTP / MCP / 库调用三条路径都无法绕过。
+ */
+const MAX_COMPETITORS = 5;
+const MAX_SERP_RESULTS = 50;
+const MAX_AI_CITATIONS = 500;
+const MAX_PAGE_AUDITS = 200;
+const MAX_URLS_PER_COMPETITOR = 10;
+
+function cap<T>(arr: T[] | undefined, max: number): T[] {
+  return (arr ?? []).slice(0, max);
+}
+
 export async function analyzeCompetitors(
   input: CompetitorInput
 ): Promise<CompetitorReport> {
-  const { userDomain, competitors, fetchProtocol } = input;
+  const userDomain = input.userDomain;
+  const competitors = Array.from(new Set(input.competitors)).slice(
+    0,
+    MAX_COMPETITORS
+  );
+  const fetchProtocol = input.fetchProtocol;
+  const serpResults = cap(input.serpResults, MAX_SERP_RESULTS);
+  const aiCitations = cap(input.aiCitations, MAX_AI_CITATIONS);
+  const userPageAudits = cap(input.userPageAudits, MAX_PAGE_AUDITS);
+  const competitorPageAudits = cap(input.competitorPageAudits, MAX_COMPETITORS).map(
+    (ca) => ({ ...ca, audits: cap(ca.audits, MAX_PAGE_AUDITS) })
+  );
+  const competitorPageUrls = cap(input.competitorPageUrls, MAX_COMPETITORS).map(
+    (cu) => ({ ...cu, urls: cap(cu.urls, MAX_URLS_PER_COMPETITOR) })
+  );
+  const competitorCrawls = cap(input.competitorCrawls, MAX_COMPETITORS);
 
   // ── 维度 1：SERP 位次（纯函数） ──
-  const serpDim = compareSerpPositions(
-    input.serpResults ?? [],
-    userDomain,
-    competitors
-  );
+  const serpDim = compareSerpPositions(serpResults, userDomain, competitors);
 
   // ── 维度 2：AI 提及/引用（纯函数） ──
-  const aiDim = compareAiMentions(
-    input.aiCitations ?? [],
-    userDomain,
-    competitors
-  );
+  const aiDim = compareAiMentions(aiCitations, userDomain, competitors);
 
   // ── 维度 3：GEO 评分（async） ──
-  const userGeoSources: GeoAuditSource[] = input.userPageAudits ?? (input.userCrawl ? crawlToGeoSources(input.userCrawl) : []);
-  const competitorGeoAudits = input.competitorPageAudits?.map((ca) => ({
+  const userGeoSources: GeoAuditSource[] =
+    userPageAudits.length > 0
+      ? userPageAudits
+      : input.userCrawl
+        ? crawlToGeoSources(input.userCrawl).slice(0, MAX_PAGE_AUDITS)
+        : [];
+  const competitorGeoAudits = competitorPageAudits.map((ca) => ({
     domain: ca.domain,
     audits: ca.audits,
-  })) ?? [];
+  }));
   // 如果竞品 crawl 数据可用，也转为 geo sources
-  const competitorCrawlGeo = input.competitorCrawls?.map((cc) => ({
+  const competitorCrawlGeo = competitorCrawls.map((cc) => ({
     domain: cc.domain,
-    audits: crawlToGeoSources(cc.crawl),
-  })) ?? [];
+    audits: crawlToGeoSources(cc.crawl).slice(0, MAX_PAGE_AUDITS),
+  }));
   // 合并预收集的 audits 和 crawl-derived sources
   const mergedGeoCompetitors = [...competitorGeoAudits, ...competitorCrawlGeo];
   const geoDim = await compareGeoScores(userDomain, competitors, {
     userAudits: userGeoSources,
     competitorAudits: mergedGeoCompetitors,
-    competitorUrls: input.competitorPageUrls,
+    competitorUrls: competitorPageUrls,
     fetchProtocol,
   });
 
@@ -84,16 +112,21 @@ export async function analyzeCompetitors(
   });
 
   // ── 维度 5：结构化数据（纯函数） ──
-  const userSchemaSources = input.userPageAudits ?? (input.userCrawl ? crawlToSchemaSources(input.userCrawl) : []);
+  const userSchemaSources =
+    userPageAudits.length > 0
+      ? userPageAudits
+      : input.userCrawl
+        ? crawlToSchemaSources(input.userCrawl).slice(0, MAX_PAGE_AUDITS)
+        : [];
   const competitorSchemaSources = [
-    ...(input.competitorPageAudits?.map((ca) => ({
+    ...competitorPageAudits.map((ca) => ({
       domain: ca.domain,
       sources: ca.audits,
-    })) ?? []),
-    ...(input.competitorCrawls?.map((cc) => ({
+    })),
+    ...competitorCrawls.map((cc) => ({
       domain: cc.domain,
-      sources: crawlToSchemaSources(cc.crawl),
-    })) ?? []),
+      sources: crawlToSchemaSources(cc.crawl).slice(0, MAX_PAGE_AUDITS),
+    })),
   ];
   const schemaDim = compareStructuredData(userSchemaSources, competitorSchemaSources);
 

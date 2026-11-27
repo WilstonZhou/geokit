@@ -94,6 +94,13 @@ describe("Evidence & Identity (Unit Tests)", () => {
       assert.ok(!sanitized.includes("AIzaSySecretKey"));
       assert.ok(sanitized.includes(`key=${encodeURIComponent(REDACTED)}`) || sanitized.includes(`key=${REDACTED}`));
     });
+
+    it("URL 内嵌的 userinfo 凭据被擦除", () => {
+      const sanitized = redactUrl("https://user:pass@example.com/path");
+      assert.ok(!sanitized.includes("user"));
+      assert.ok(!sanitized.includes("pass"));
+      assert.ok(sanitized.includes("example.com"));
+    });
   });
 
   describe("5 AI 状态与可见性分数聚合", () => {
@@ -113,5 +120,42 @@ describe("Evidence & Identity (Unit Tests)", () => {
       const score = visibilityScoreOf(s);
       assert.strictEqual(score, 50); // 1 / (1 + 1) = 50%
     });
+  });
+});
+
+describe("Evidence 回归：新记录不应被误标 migratedFrom", () => {
+  it("显式 subject/source 的新采集保留 identity 且带 provenance", async () => {
+    const { evidenceFromFetch } = await import("../../src/lib/evidence/store");
+    const ev = evidenceFromFetch(
+      {
+        ok: true,
+        status: 200,
+        finalUrl: "https://example.com/robots.txt",
+        headers: { "content-type": "text/plain" },
+        body: "User-agent: *",
+        byteLength: 13,
+        bodyHash: "h",
+        elapsedMs: 1,
+        attempts: [{ attempt: 1, elapsedMs: 1, outcome: "ok" }],
+        waitedMs: 0,
+        request: {
+          url: "https://example.com/robots.txt",
+          method: "GET",
+          headers: {},
+        },
+        context: {
+          purpose: "robots",
+          subject: "site:https://example.com",
+          source: "http:https://example.com",
+          requestedAt: "2026-10-01T00:00:00Z",
+        },
+      },
+      "robots_txt"
+    );
+    assert.equal(ev.subject, "site:https://example.com");
+    assert.equal(ev.source, "http:https://example.com");
+    assert.equal(ev.migratedFrom, undefined);
+    assert.ok(ev.provenance);
+    assert.equal(ev.provenance?.httpStatus, 200);
   });
 });

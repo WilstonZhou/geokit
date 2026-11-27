@@ -6,7 +6,7 @@
  * 属于实体清晰度与草稿生成的职责，不在此处混淆。
  */
 import type { PageFacts, JsonLdNode } from "./extract";
-import { nodesOfType, deepStr } from "./extract";
+import { nodesOfType, deepStr, normalizeDate } from "./extract";
 import { PAGE_TYPE_SCHEMA } from "./types";
 import type {
   ConsistencyIssue,
@@ -283,9 +283,7 @@ function textAgrees(a: string, b: string): boolean {
 
 function isoDay(v: unknown): string | undefined {
   if (typeof v !== "string" || !v.trim()) return undefined;
-  const t = Date.parse(v);
-  if (Number.isFinite(t)) return new Date(t).toISOString().slice(0, 10);
-  return undefined;
+  return normalizeDate(v) ?? undefined;
 }
 
 export function checkConsistency(

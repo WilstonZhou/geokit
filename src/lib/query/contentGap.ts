@@ -68,8 +68,8 @@ export function findContentGaps(
       const d = (item.domain || "").toLowerCase();
       if (!competitorDomains.has(d)) continue;
       const topics = extractTopics(item.title);
-      // 同一标题切出多个 token —— 取前 3 个最有代表性的（首字最长）
-      const picked = topics.slice(0, 3);
+      // 同一标题切出多个 token —— 取最长的 3 个（通常信息量最大）
+      const picked = [...topics].sort((a, b) => b.length - a.length).slice(0, 3);
       for (const t of picked) {
         const arr = topicMap.get(t) ?? [];
         arr.push({ competitorUrl: item.url, title: item.title, domain: d });
@@ -102,7 +102,8 @@ export function findContentGaps(
     else if (covered >= 3) userCoverage = "partial"; // 竞品有 3+ 个覆盖、用户只有一个标题命中
     else userCoverage = "full";
 
-    // 只输出用户未覆盖或部分覆盖的话题
+    // 只输出“缺口”：none / partial。
+    // full 是“用户已覆盖”，不是缺口，故不进入输出（字段保留用于语义完整）。
     if (userCoverage === "full") continue;
 
     out.push({

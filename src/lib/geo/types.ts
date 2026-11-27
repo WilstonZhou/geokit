@@ -43,6 +43,8 @@ export interface ContentShape {
   dataPoints: number;
   externalCitations: number;
   hasTldr: boolean;
+  /** 首屏是否出现明确的结论性措辞（不含“有数据点”这种宽泛兜底） */
+  hasTldrPhrase?: boolean;
   avgSentenceLength: number;
   /** v2: 是否具备首段高置信度直接回答（Direct Answer） */
   hasDirectAnswer?: boolean;
@@ -68,6 +70,10 @@ export interface JsonLdInfo {
   hasOrganization: boolean;
   hasDatePublished: boolean;
   hasDateModified: boolean;
+  /** JSON-LD 中声明的第一个发布日期（保留原字符串） */
+  datePublished?: string;
+  /** JSON-LD 中声明的第一个修改日期（保留原字符串） */
+  dateModified?: string;
   /** v2: 是否包含权威消歧属性（sameAs / identifier） */
   hasSameAs?: boolean;
   /** v2.1: 是否检测到 FAQPage 类型（Q&A 摘要搬运首选信源） */

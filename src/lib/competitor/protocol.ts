@@ -22,17 +22,23 @@ function getBlockedCrawlers(r: RobotsAnalysis): string[] {
     .map((p) => p.crawler.name);
 }
 
-/** 组装 ProtocolComparison 值 */
+/**
+ * 组装 ProtocolComparison 值。
+ *
+ * robots 与 llms.txt 任一侧缺失时**不补 0 / false** —— 那会把“没观测”
+ * 伪装成“观测到开放度 0 / 没有 llms.txt”。缺一侧就没有完整值，由 status
+ * 标 unavailable，evidence 仍保留已观测到的一侧。
+ */
 function buildValue(
   robots: RobotsAnalysis | undefined,
   llmsTxt: LlmsTxtAnalysis | undefined
 ): ProtocolComparison | null {
-  if (!robots && !llmsTxt) return null;
+  if (!robots || !llmsTxt) return null;
   return {
-    aiOpennessScore: robots?.aiOpennessScore ?? 0,
-    hasLlmsTxt: llmsTxt?.exists ?? false,
-    llmsTxtScore: llmsTxt?.score ?? 0,
-    blockedCrawlers: robots ? getBlockedCrawlers(robots) : [],
+    aiOpennessScore: robots.aiOpennessScore,
+    hasLlmsTxt: llmsTxt.exists,
+    llmsTxtScore: llmsTxt.score,
+    blockedCrawlers: getBlockedCrawlers(robots),
   };
 }
 
@@ -56,13 +62,21 @@ function buildEvidence(
   return ev;
 }
 
-/** 确定单个主体的 status */
+/** 确定单个主体的 status —— 只有 robots 与 llms.txt 都观测到才算完整可用 */
 function determineStatus(
   robots: RobotsAnalysis | undefined,
   llmsTxt: LlmsTxtAnalysis | undefined
 ): CompetitorStatus {
-  if (!robots && !llmsTxt) return "unavailable";
-  return "available";
+  return robots && llmsTxt ? "available" : "unavailable";
+}
+
+function statusReason(
+  robots: RobotsAnalysis | undefined,
+  llmsTxt: LlmsTxtAnalysis | undefined
+): string | undefined {
+  if (robots && llmsTxt) return undefined;
+  if (!robots && !llmsTxt) return "缺少 robots.txt 与 llms.txt 观测";
+  return !robots ? "缺少 robots.txt 观测" : "缺少 llms.txt 观测";
 }
 
 /** 协议维度 gap（AI 开放度越高越好） */
@@ -71,9 +85,8 @@ function determineProtocolGap(
   compScores: (number | null)[]
 ): "behind" | "ahead" | "parity" | "incomparable" {
   const validComps = compScores.filter((v): v is number => v !== null);
-  if (userScore === null && validComps.length === 0) return "incomparable";
-  if (userScore === null) return "behind";
-  if (validComps.length === 0) return "ahead";
+  // 任一侧缺数据 → 无法对比；不要用 0 或 ahead 代替“没观测”
+  if (userScore === null || validComps.length === 0) return "incomparable";
   if (validComps.some((c) => c > userScore)) return "behind";
   if (validComps.some((c) => c < userScore)) return "ahead";
   return "parity";
@@ -137,18 +150,13 @@ export async function compareAiCrawlProtocol(
     const compRobots = preRobots.get(comp);
     const compLlmsTxt = preLlmsTxt.get(comp);
     const value = buildValue(compRobots, compLlmsTxt);
-    if (!value) {
-      return {
-        domain: comp,
-        value: null,
-        status: "unavailable" as CompetitorStatus,
-        evidence: [],
-      };
-    }
+    const status = determineStatus(compRobots, compLlmsTxt);
     return {
       domain: comp,
       value,
-      status: determineStatus(compRobots, compLlmsTxt),
+      status,
+      statusReason: statusReason(compRobots, compLlmsTxt),
+      // 即使缺一侧，也把已观测到的一侧放进 evidence
       evidence: buildEvidence(comp, compRobots, compLlmsTxt),
     };
   });
@@ -156,20 +164,26 @@ export async function compareAiCrawlProtocol(
   const compScores = competitorValues.map((c) =>
     c.value && c.status === "available" ? c.value.aiOpennessScore : null
   );
+  const validCompScores = compScores.filter((v): v is number => v !== null);
   const gap = determineProtocolGap(userScore, compScores);
 
   let summary: string;
-  if (gap === "incomparable") {
-    summary = "用户与竞品均无协议层数据。";
-  } else if (userStatus === "unavailable") {
-    summary = "未提供用户协议层数据，无法对比。";
+  if (userStatus !== "available") {
+    summary = "未提供用户完整的 robots.txt / llms.txt 观测，无法对比。";
+  } else if (validCompScores.length === 0) {
+    summary = "竞品没有完整的协议层数据，无法对比。";
   } else if (gap === "behind") {
     const leaders = competitorValues
-      .filter((c) => c.value && (userScore ?? 0) < c.value.aiOpennessScore)
+      .filter(
+        (c) =>
+          c.status === "available" &&
+          c.value &&
+          (userScore ?? 0) < c.value.aiOpennessScore
+      )
       .map((c) => `${c.domain}(开放度${c.value!.aiOpennessScore})`);
     summary = `用户 AI 开放度 ${userScore}，落后：${leaders.join("、")}`;
   } else if (gap === "ahead") {
-    summary = `用户 AI 开放度 ${userScore}，领先全部竞品。`;
+    summary = `用户 AI 开放度 ${userScore}，领先所有有完整数据的竞品。`;
   } else {
     summary = `用户 AI 开放度 ${userScore}，与竞品持平。`;
   }
@@ -196,7 +210,7 @@ export async function compareAiCrawlProtocol(
     dimension: "protocol",
     userValue,
     userStatus,
-    userStatusReason: userStatus === "unavailable" ? "未提供用户协议层数据" : undefined,
+    userStatusReason: statusReason(userRobots, userLlmsTxt),
     userEvidence,
     competitorValues,
     summary,

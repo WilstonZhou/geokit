@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   extractFromHtml,
   extractFromHttpHeaders,
+  extractFromPage,
   extractFromSitemap,
   analyzeHreflang,
   isValidLangCode,
@@ -303,5 +304,93 @@ describe("analyzeHreflang - 语言声明不一致", () => {
     const result = analyzeHreflang(pages);
     const issue = result.issues.find((i) => i.type === "lang-mismatch-suspect");
     assert.ok(issue);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 回归：URL 解析 / 缺回链 / BCP 47                                     */
+/* ------------------------------------------------------------------ */
+
+describe("hreflang 回归", () => {
+  it("相对 href 会按页面 URL 解析成绝对地址", () => {
+    const entries = extractFromPage({
+      url: "https://example.com/zh/",
+      html: `<link rel="alternate" hreflang="en" href="/en/">
+             <link rel="alternate" hreflang="zh-CN" href="/zh/">`,
+    });
+    assert.deepEqual(
+      entries.map((e) => e.url).sort(),
+      ["https://example.com/en/", "https://example.com/zh/"]
+    );
+  });
+
+  it("相对 href 不再误报 missing-self-reference", () => {
+    const result = analyzeHreflang([
+      {
+        url: "https://example.com/zh/",
+        html: `<link rel="alternate" hreflang="en" href="/en/">
+               <link rel="alternate" hreflang="zh-CN" href="/zh/">`,
+      },
+      {
+        url: "https://example.com/en/",
+        html: `<link rel="alternate" hreflang="en" href="/en/">
+               <link rel="alternate" hreflang="zh-CN" href="/zh/">`,
+      },
+    ]);
+    assert.equal(
+      result.issues.some((i) => i.type === "missing-self-reference"),
+      false
+    );
+  });
+
+  it("目标页已爬取但没有任何 hreflang → missing-reciprocal", () => {
+    const result = analyzeHreflang([
+      {
+        url: "https://example.com/zh/",
+        html: `<link rel="alternate" hreflang="en" href="https://example.com/en/">
+               <link rel="alternate" hreflang="zh-CN" href="https://example.com/zh/">`,
+      },
+      {
+        url: "https://example.com/en/",
+        html: `<html><head></head><body>English</body></html>`,
+      },
+    ]);
+    const issue = result.issues.find((i) => i.type === "missing-reciprocal");
+    assert.ok(issue);
+    assert.ok(issue!.affectedUrls.includes("https://example.com/zh/"));
+  });
+
+  it("接受 zh-Hans / zh-Hant 等合法 BCP 47 代码", () => {
+    assert.equal(isValidLangCode("zh-Hans"), true);
+    assert.equal(isValidLangCode("zh-Hant"), true);
+    assert.equal(isValidLangCode("sr-Latn-RS"), true);
+    assert.equal(isValidLangCode("x-default"), true);
+    assert.equal(isValidLangCode("x-Default"), true);
+    assert.equal(isValidLangCode("not a lang"), false);
+  });
+
+  it("normalizeLangCode 保留 script 大小写规范", () => {
+    assert.equal(normalizeLangCode("zh-hans"), "zh-Hans");
+    assert.equal(normalizeLangCode("zh-hant-tw"), "zh-Hant-TW");
+    assert.equal(normalizeLangCode("X-DEFAULT"), "x-default");
+  });
+
+  it("sitemap link 属性顺序不影响解析", () => {
+    const xml = `<urlset xmlns:xhtml="http://www.w3.org/1999/xhtml">
+      <url>
+        <loc>https://example.com/zh/</loc>
+        <xhtml:link href="https://example.com/en/" hreflang="en" rel="alternate"/>
+      </url>
+    </urlset>`;
+    const map = extractFromSitemap(xml);
+    assert.equal(map.get("https://example.com/zh/")?.[0]?.url, "https://example.com/en/");
+  });
+
+  it("HTTP Link 头参数顺序/额外参数不影响解析", () => {
+    const entries = extractFromHttpHeaders({
+      link: '<https://example.com/en/>; hreflang="en"; type="text/html"; rel="alternate"',
+    });
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]!.lang, "en");
   });
 });
