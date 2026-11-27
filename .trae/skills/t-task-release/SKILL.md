@@ -8,7 +8,7 @@ description: Ship a finished geokit Tn task - run four gates, check changelog, s
 把一个**已实现完成**的 Phase 2 Tn 任务安全地提交并推送到 `origin/main`。
 触发前提：用户明确说「提交并推送 / 发布 Tn / commit and push」。实现任务本身不属于本技能。
 
-环境是 **Windows PowerShell**，仓库约定见 docs/协作协议.md 与 docs/CHANGELOG.md。
+环境是 **Windows PowerShell**，仓库约定见 docs/CHANGELOG.md 与 CONTRIBUTING.md。
 
 ## 0. 硬纪律
 

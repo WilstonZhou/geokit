@@ -23,6 +23,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# 本地 Agent / 编辑器配置（可能含机器绝对路径，不进版本库）
+.agents/
+
 # 编辑器 / 系统
 .vscode/
 .idea/

@@ -5,6 +5,18 @@
 
 ---
 
+## [Unreleased] - 2026-11-27
+
+### 安全与正确性修复
+
+- API 默认仅监听 `127.0.0.1`，移除 `/api/*` 通配 CORS；新增 SSRF 私网/重定向防护、请求体与响应体上限、爬虫参数钳制。
+- 修复爬虫并发池实际退化为 1、robots 通配符失效、Opportunity 复检结构错位、竞品 0 分/无数据误判、GEO 标题顺序、hreflang 相对 URL、引用 position 语义等问题。
+- Opportunity 复检补齐实体缺失数与站点问题；探测失败结构化返回；引用 diff 区分 INDETERMINATE；Store 时间线按真实时刻排序；GEO v2 收紧 Direct Answer 与句长评分。
+- 升级 next 16.4.6 / zod 4.6.7，`npm audit` 0 漏洞；Node 要求提升到 `>=22.13.0`。
+- CI 基线改用跨 run cache，回归脚本纳入 CI；全量测试 518 项（含 API 路由级回归）。
+
+---
+
 ## [1.0.0] - 2026-10-09
 
 ### 🚀 企业级持续观测底座正式封版 (V1.0 Release Audit Passed)

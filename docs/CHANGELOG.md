@@ -13,6 +13,35 @@ AIGC:
 
 本文件是 GEOkit 的唯一正源记录。所有决策、实现与修复均应写回此处。
 
+## [Unreleased] — 2026-11-27 · 安全加固与全量回归修复
+
+### 安全
+- API 默认仅监听 `127.0.0.1`，移除 `/api/*` 通配 CORS。
+- Fetcher 增加 SSRF 防护：仅 http/https、拒绝回环/RFC1918/链路本地/云元数据、DNS 解析校验、重定向逐跳校验。
+- HTTP 请求体 1–8MB 流式上限；响应体超 `maxBytes` 立即中断；爬虫 config 钳制；SERP / 竞品 / LLM / CrUX 数组硬上限。
+- MCP JSON-RPC `null` / 非对象输入返回 `Invalid Request`；stdio 单行坏输入不再退出进程。
+
+### 修复
+- 爬虫并发池改为 BFS 波次执行（原实现实际并发恒为 1）；同站 URL 重定向到站外不再按本站内容分析。
+- robots.txt 支持 `*` / `$` 与 query；sitemap 排除 `image:loc`。
+- Opportunity 复检对齐真实 Observation 结构（`exists` / `overallCategory` / GSC `topRows` / `citedDomains` / `pageInCrawl`）。
+- 竞品对比不再把真实 0 分或 unavailable 数据包装成 behind/ahead；Protocol 缺一侧不再补 0/false。
+- hreflang 解析相对 URL、识别“已爬但无声明”的缺回链、支持 `zh-Hans` 等 BCP 47 script、兼容属性顺序。
+- 引用 `position` 改为 1 起序号；修复中文标点吞 URL、括号 URL 截断。
+- GEO 标题按文档顺序判断跳级；日期保留声明日历日期并支持 JSON-LD 来源；Schema 草稿 `sourcedFrom` 记录实际保留值。
+- Query 聚类 `overlapScore` 统计簇内全部配对；Diff 两侧都缺 `targetRank` 不再误报进出榜单。
+- `evidenceFromFetch` 写入 provenance，新记录不再被误标 `migratedFrom`。
+- Opportunity 复检补齐 `missingEntityCount`（复用生成规则）与 `issuePresent`（crawl Observation 携带 site issues）；无字段级 Schema Observation 的类型显式标 `manual`，不伪造结论。
+- `analyze_ai_citations` 新增结构化 `failures/skippedQueries`，探测失败不再静默消失。
+- Citation diff 对 INDETERMINATE/拒答记录返回 `indeterminate`，不再把“没回答”记成 lost。
+- Store 写入统一 canonical UTC ISO，读取/过滤按真实时刻比较，修复带时区偏移时间线的排序错误。
+- GEO v2 不再给空正文“句长适中”分；Direct Answer 改用严格措辞信号，不再被“有数据点”宽泛兜底触发。
+
+### 工程
+- 升级 `next@16.4.6` / `zod@4.6.7` / `eslint-config-next@16.4.6`，`npm audit` 0 漏洞。
+- `engines.node` 改为 `>=22.13.0`（`node:sqlite` 免 flag）；版本 1.0.0。
+- CI 基线改用 `actions/cache` 跨 run 恢复；`regression.ts check` 纳入 CI；测试 518 项（新增 API 路由级回归）。
+
 ## [Phase 2 T13] — 2026-10-09 · 整体收尾（MCP 一致性 / 文档 / 质量门禁 / 安全 / 能力对照）
 
 > 在前面 12 个任务全部完成的基础上，对全项目做一次收尾：MCP 工具一致性检查、README 全面更新、docs/ 数据模型/评分规则/扩展指南补齐、质量门禁与依赖检查、安全检查，最后输出能力完成度对照表。

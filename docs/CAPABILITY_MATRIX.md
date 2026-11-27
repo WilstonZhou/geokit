@@ -8,7 +8,7 @@
 |--------|------|------|------|
 | MCP Server（Streamable HTTP + stdio） | ✅ | 两种传输方式已支持 | — |
 | 工具注册与路由 | ✅ | 25 个工具，统一的 ToolDef + callTool switch | — |
-| 输入校验 | ✅ | 所有工具 args 经 typeof + 非空校验 | zod 仅用于 development deps，运行时未启用 zod schema 严格校验 |
+| 输入校验 | ✅ | `callTool` 入口对 25 个工具执行 zod `safeParse`，并使用解析后的值；数组/并发/页数均有上限 | HTTP 路由另有限流与请求体 1–8MB 上限 |
 | 错误处理 | ✅ | 统一抛 Error + isError 标记 | — |
 
 ## T1: 多引擎 SERP 采集
@@ -181,5 +181,5 @@
 | docs/ 扩展指南 | ✅ | EXTENDING.md | — |
 | 质量门禁确认 | ✅ | typecheck/lint/test/build 全绿 | — |
 | 依赖检查（4 个） | ✅ | next/react/react-dom/zod | — |
-| 安全检查 | ✅ | 无密钥泄露/速率限制/输入校验 | — |
+| 安全检查 | ✅ | 无密钥泄露/速率限制/输入校验/SSRF 私网拦截/默认仅监听 127.0.0.1 | 无鉴权仍按本地单用户设计，禁止直接暴露公网 |
 | 能力完成度对照表 | ✅ | 本文件 | — |
