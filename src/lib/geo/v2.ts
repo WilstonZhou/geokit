@@ -26,7 +26,8 @@ export function computeGeoV2(input: GeoInput): GeoResult {
   let quotability = 0;
 
   // 1.1 首屏高置信度直接回答 (7) —— v2.1: 8→7 为 1.6 FAQ 让权
-  if (s.hasDirectAnswer || s.hasTldr) {
+  // 优先用严格措辞信号；旧调用方没传 hasTldrPhrase 时才回退到 hasTldr
+  if (s.hasDirectAnswer || (s.hasTldrPhrase ?? s.hasTldr)) {
     quotability += 7;
   }
 
@@ -198,7 +199,8 @@ export function computeGeoV2(input: GeoInput): GeoResult {
   // 6.1 句子长度（大模型注意力与滑动窗口分块最优区间 15-45 字符/词） (4) —— v2.1: 5→4 为 6.3 让权
   if (s.avgSentenceLength >= 10 && s.avgSentenceLength <= 45) {
     readability += 4;
-  } else if (s.avgSentenceLength <= 65) {
+  } else if (s.avgSentenceLength > 0 && s.avgSentenceLength <= 65) {
+    // 0 = 没有句子/空正文，不能拿“句长适中”的分
     readability += 2;
   }
 

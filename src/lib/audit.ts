@@ -10,7 +10,7 @@
 
 import {
   findTags, stripTags, getTitle, getMeta, getAllMeta,
-  getCanonical, getHeading, absolutize,
+  getCanonical, absolutize,
 } from "./html";
 import { fetchWithPolicy, type FetchResult } from "./fetcher";
 import { evidenceEnabled, evidenceFromFetch } from "./evidence/store";
@@ -310,12 +310,16 @@ export function analyze(
   const canonical = getCanonical(html);
   const robotsMeta = getMeta(html, "robots");
 
-  const headings: { level: number; text: string }[] = [];
-  for (let lvl = 1; lvl <= 6; lvl++) {
-    for (const h of getHeading(html, lvl)) {
-      if (h) headings.push({ level: lvl, text: h });
-    }
-  }
+  // 必须保留文档顺序：按 h1..h6 分级别收集会把 H1→H3→H2 重排成 1,2,3，
+  // 让“标题跳级”检查永远看不出问题。
+  const headings: { level: number; text: string }[] = findTags(html, [
+    "h1", "h2", "h3", "h4", "h5", "h6",
+  ])
+    .map((tag) => ({
+      level: Number(tag.name.slice(1)),
+      text: stripTags(html.slice(tag.contentStart, tag.contentEnd)).trim(),
+    }))
+    .filter((h) => h.text.length > 0);
 
   const ld = extractJsonLdInfo(html);
   const jsonLdTypes = ld.types;
@@ -586,16 +590,20 @@ function analyzeContentShape(
     ? Math.round(text.replace(/[。！？.!?]/g, "").length / sentences.length)
     : 0;
 
-  // TL;DR：前 400 字里是否出现结论性表述
+  // TL;DR：前 400 字里是否出现结论性表述。
+  // v1 使用宽口径 hasTldr（含“有数据点”兜底）以保持基线冻结；
+  // v2 改用严格措辞信号，避免任何带数字的正文都白拿“直接回答”分。
   const head = text.slice(0, 400);
-  const hasTldr =
-    /(总结|核心结论|要点|综上|一句话|tldr|key takeaway| TL;?DR)/i.test(head) ||
-    (dataPoints > 0 && head.length > 80);
+  const hasTldrPhrase =
+    /(总结|核心结论|要点|综上|一句话|tldr|key takeaway| TL;?DR)/i.test(head);
+  const hasTldr = hasTldrPhrase || (dataPoints > 0 && head.length > 80);
 
   // v2: 首屏直接回答
+  // 不再把任意冒号当作“直接回答”：中文正文几乎每段都有冒号，
+  // 那样会让几乎所有页面白拿 7 分。
   const hasDirectAnswer =
     hasTldr ||
-    /(定义|简言之|简单来说|核心是|答案是|什么是|指的是|：|:\s*|is\s+a|refers\s+to|means)/i.test(head);
+    /(定义|简言之|简单来说|核心是|答案是|什么是|指的是|is\s+a|refers\s+to|means)/i.test(head);
 
   // v2: HTML5 语义地标标签
   const hasSemanticLandmarks = findTags(html, ["main", "article"]).length > 0;
@@ -649,17 +657,23 @@ function analyzeContentShape(
   const hasAuthoritativeSources = authorityDomains.size >= 1;
 
   // v2.1: 更新时间一致性 —— modified >= published 且 modified 距今 ≤365 天
+  // meta 与 JSON-LD 都是合法来源：只声明 JSON-LD 日期的页面不应恒判失败。
   const publishedStr =
-    allMeta?.["article:published_time"] || allMeta?.["pubdate"] || allMeta?.["date"];
+    allMeta?.["article:published_time"] ||
+    allMeta?.["pubdate"] ||
+    allMeta?.["date"] ||
+    ld?.datePublished;
   const modifiedStr =
-    allMeta?.["article:modified_time"] || allMeta?.["og:updated_time"];
+    allMeta?.["article:modified_time"] ||
+    allMeta?.["og:updated_time"] ||
+    ld?.dateModified;
   const publishedTime = publishedStr ? Date.parse(publishedStr) : NaN;
   const modifiedTime = modifiedStr ? Date.parse(modifiedStr) : NaN;
   let hasDateConsistency = false;
   if (Number.isFinite(publishedTime) && Number.isFinite(modifiedTime)) {
     const withinOneYear = Date.now() - modifiedTime <= 365 * 24 * 60 * 60 * 1000;
     hasDateConsistency = modifiedTime >= publishedTime && withinOneYear && modifiedTime <= Date.now();
-  } else if (ld?.hasDateModified && Number.isFinite(modifiedTime)) {
+  } else if (Number.isFinite(modifiedTime)) {
     // 只有 modified 时：仅校验时效性
     hasDateConsistency = Date.now() - modifiedTime <= 365 * 24 * 60 * 60 * 1000 && modifiedTime <= Date.now();
   }
@@ -674,6 +688,7 @@ function analyzeContentShape(
     dataPoints,
     externalCitations,
     hasTldr,
+    hasTldrPhrase,
     avgSentenceLength,
     hasDirectAnswer,
     hasSemanticLandmarks,
@@ -695,6 +710,8 @@ function extractJsonLdInfo(html: string): JsonLdInfo {
   let hasSameAs = false;
   let hasFaqPage = false;
   let hasAuthorSameAs = false;
+  let datePublished: string | undefined;
+  let dateModified: string | undefined;
 
   for (const sc of findTags(html, ["script"])) {
     if (!/ld\+json/i.test(sc.attrs.type ?? "")) continue;
@@ -727,8 +744,18 @@ function extractJsonLdInfo(html: string): JsonLdInfo {
 
       if (o.author !== undefined || o.creator !== undefined) hasAuthor = true;
       if (o.publisher !== undefined) hasOrganization = true;
-      if (o.datePublished !== undefined) hasDatePublished = true;
-      if (o.dateModified !== undefined) hasDateModified = true;
+      if (o.datePublished !== undefined) {
+        hasDatePublished = true;
+        if (datePublished === undefined && typeof o.datePublished === "string") {
+          datePublished = o.datePublished;
+        }
+      }
+      if (o.dateModified !== undefined) {
+        hasDateModified = true;
+        if (dateModified === undefined && typeof o.dateModified === "string") {
+          dateModified = o.dateModified;
+        }
+      }
       if (o.sameAs !== undefined || o.identifier !== undefined) {
         hasSameAs = true;
         if (inAuthor) hasAuthorSameAs = true;
@@ -755,6 +782,8 @@ function extractJsonLdInfo(html: string): JsonLdInfo {
     hasOrganization,
     hasDatePublished,
     hasDateModified,
+    datePublished,
+    dateModified,
     hasSameAs,
     hasFaqPage,
     hasAuthorSameAs,

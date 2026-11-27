@@ -11,7 +11,14 @@ import type {
   PageInput,
 } from "./types";
 import { isValidLangCode, normalizeLangCode } from "./types";
-import { extractFromPage, extractFromSitemap } from "./extract";
+import {
+  extractCanonical,
+  extractFromPage,
+  extractFromSitemap,
+  extractHtmlLang,
+  extractNoindex,
+  extractTextContent,
+} from "./extract";
 
 /** 构建 URL → 条目集合映射（合并三种来源） */
 function buildEntryMap(
@@ -49,7 +56,9 @@ export function checkMissingSelfReference(
 
   for (const [url, entries] of pageEntries) {
     const langs = new Set(entries.map((e) => e.lang));
-    const hasSelf = entries.some((e) => e.url === url && e.lang !== "x-default");
+    const hasSelf = entries.some(
+      (e) => e.url === url && e.lang.toLowerCase() !== "x-default"
+    );
     if (!hasSelf && langs.size > 0) {
       affected.push(url);
       evidence.push({
@@ -74,17 +83,26 @@ export function checkMissingSelfReference(
 
 /** 2. 缺少回链：A 指向 B，但 B 未指回 A */
 export function checkMissingReciprocal(
-  pageEntries: Map<string, HreflangEntry[]>
+  pageEntries: Map<string, HreflangEntry[]>,
+  pages: PageInput[]
 ): HreflangCheckResult[] {
   const affected: string[] = [];
   const evidence: { fact: string; value?: string }[] = [];
+  const crawledUrls = new Set(pages.map((p) => p.url));
 
   for (const [url, entries] of pageEntries) {
     for (const entry of entries) {
-      if (entry.lang === "x-default") continue;
+      if (entry.lang.toLowerCase() === "x-default") continue;
       const targetEntries = pageEntries.get(entry.url);
       if (!targetEntries) {
-        // 目标页面不在爬取范围内，无法验证回链
+        // target 不在爬取范围 → 无法验证；target 已爬取但没有任何 hreflang
+        // 条目 → 明确缺回链（不能把“没声明”当成“没爬”）
+        if (!crawledUrls.has(entry.url)) continue;
+        affected.push(url);
+        evidence.push({
+          fact: `${url} 声明了 ${entry.lang} 版本 ${entry.url}，但该页面没有任何 hreflang 声明`,
+          value: entry.url,
+        });
         continue;
       }
       // 回链：B 页面有指向 A 页面 URL 的条目即可（不强制 lang 匹配）
@@ -158,13 +176,19 @@ export function checkBrokenTarget(
       const targetPage = pageMap.get(entry.url);
       if (!targetPage) continue;
 
+      const noindex =
+        targetPage.noindex === true ||
+        (targetPage.noindex === undefined &&
+          targetPage.html !== undefined &&
+          extractNoindex(targetPage.html));
+
       if (targetPage.httpStatus && targetPage.httpStatus >= 400) {
         affected.push(url);
         evidence.push({
           fact: `目标页面返回 ${targetPage.httpStatus}`,
           value: entry.url,
         });
-      } else if (targetPage.noindex) {
+      } else if (noindex) {
         affected.push(url);
         evidence.push({
           fact: `目标页面有 noindex 标记`,
@@ -205,12 +229,17 @@ export function checkCanonicalConflict(
   for (const [url, entries] of pageEntries) {
     for (const entry of entries) {
       const targetPage = pageMap.get(entry.url);
-      if (!targetPage?.canonical) continue;
+      if (!targetPage) continue;
+      // 调用方可能只传 url + html（MCP 常见用法），此时从 HTML 补取 canonical
+      const canonical =
+        targetPage.canonical ??
+        (targetPage.html ? extractCanonical(targetPage.html) : undefined);
+      if (!canonical) continue;
 
-      if (targetPage.canonical !== entry.url) {
+      if (canonical !== entry.url) {
         affected.push(url);
         evidence.push({
-          fact: `hreflang 指向 ${entry.url}，但该页 canonical 为 ${targetPage.canonical}`,
+          fact: `hreflang 指向 ${entry.url}，但该页 canonical 为 ${canonical}`,
           value: entry.url,
         });
       }
@@ -238,7 +267,9 @@ export function checkMissingXDefault(
   const evidence: { fact: string }[] = [];
 
   for (const [url, entries] of pageEntries) {
-    const hasXDefault = entries.some((e) => e.lang === "x-default");
+    const hasXDefault = entries.some(
+      (e) => e.lang.toLowerCase() === "x-default"
+    );
     if (!hasXDefault && entries.length > 0) {
       affected.push(url);
       evidence.push({
@@ -268,10 +299,15 @@ export function checkLangMismatch(
   const evidence: { fact: string; value?: string | number }[] = [];
 
   for (const page of pages) {
-    if (!page.htmlLang || !page.textContent) continue;
+    // 调用方只给 html 时，从 HTML 补取 lang 与正文
+    const htmlLang =
+      page.htmlLang ?? (page.html ? extractHtmlLang(page.html) : undefined);
+    const textContent =
+      page.textContent ?? (page.html ? extractTextContent(page.html) : undefined);
+    if (!htmlLang || !textContent) continue;
 
-    const declaredLang = normalizeLangCode(page.htmlLang);
-    const text = page.textContent;
+    const declaredLang = normalizeLangCode(htmlLang);
+    const text = textContent;
 
     // CJK 字符占比检测
     const cjkCount = (text.match(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g) ?? []).length;
@@ -293,7 +329,7 @@ export function checkLangMismatch(
       affected.push(page.url);
       evidence.push({
         fact: `疑似语言声明与内容不一致：${reason}`,
-        value: page.htmlLang,
+        value: htmlLang,
       });
     }
   }
@@ -339,7 +375,7 @@ export function analyzeHreflang(
   if (isMultilingual) {
     issues.push(
       ...checkMissingSelfReference(pageEntries),
-      ...checkMissingReciprocal(pageEntries),
+      ...checkMissingReciprocal(pageEntries, pages),
       ...checkInvalidLangCode(pageEntries),
       ...checkBrokenTarget(pageEntries, pages),
       ...checkCanonicalConflict(pageEntries, pages),

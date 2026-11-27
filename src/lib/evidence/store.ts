@@ -99,7 +99,7 @@ export function evidenceFromFetch(res: FetchResult, kind: RawEvidenceKind): Evid
     id,
     contractVersion: EVIDENCE_CONTRACT_VERSION,
     kind,
-    target: res.context.target ?? redactUrl(res.finalUrl || res.request.url),
+    target: redactUrl(res.context.target ?? (res.finalUrl || res.request.url)),
     requestUrl: redactUrl(res.request.url),
     request: {
       method: res.request.method,
@@ -139,13 +139,32 @@ export function evidenceFromFetch(res: FetchResult, kind: RawEvidenceKind): Evid
     extra: meta,
   };
 
-  // 走归一化是为了让 canonical 字段的填充规则只有一处实现
+  // 走归一化是为了让 canonical 字段的填充规则只有一处实现。
+  //
+  // 必须带上 provenance：isLegacyEvidence 用「subject + source + provenance」
+  // 判定旧契约。若新记录只给 subject/source 不给 provenance，会被误判为
+  // legacy，显式 identity 被重新推导并打上 migratedFrom。
   return normalizeEvidence({
     ...legacy,
     subject: identity.subject,
     source: identity.source,
     runId: res.context.runId,
     metadata,
+    provenance: {
+      method: res.request.method,
+      requestUrl: redactUrl(res.request.url),
+      finalUrl: redactUrl(res.finalUrl),
+      httpStatus: res.status,
+      requestHeaders: res.request.headers,
+      responseHeaders: res.headers,
+      requestedAt: res.context.requestedAt,
+      elapsedMs: res.elapsedMs,
+      waitedMs: res.waitedMs,
+      attempts: res.attempts.length,
+      error: res.error
+        ? { kind: res.error.kind, message: res.error.message }
+        : undefined,
+    },
   });
 }
 

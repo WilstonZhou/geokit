@@ -29,6 +29,7 @@ import { allowedByRobots, crawlDelayFor, fetchAndParseRobots } from "./robots";
 import { discoverSitemaps } from "./sitemap";
 import { buildSiteGraph } from "./graph";
 import { computeShingles } from "./content";
+import { analyzeSiteIssues } from "./issues";
 
 export { diffCrawlResults } from "./diff";
 export { analyzeSiteIssues } from "./issues";
@@ -57,6 +58,55 @@ export type {
 const CRAWL_OBSERVER_VERSION = "crawl-observer@0.1.0";
 const CRAWL_PARSER_VERSION = "crawler@0.1.0";
 
+/**
+ * 硬上限：HTTP 入口与 MCP 都允许调用方传 config，不能让调用方用
+ * `concurrency: 1e9` 或 `maxPages: Infinity` 打爆进程 / 打爆目标站。
+ *
+ * 这些值只约束外部输入；合法范围内的自定义仍然生效。
+ */
+export const CRAWL_LIMITS = {
+  maxPages: { min: 1, max: 1_000 },
+  maxDepth: { min: 0, max: 10 },
+  concurrency: { min: 1, max: 8 },
+  perPageTimeoutMs: { min: 1_000, max: 60_000 },
+  totalBudgetMs: { min: 1_000, max: 600_000 },
+  minRequestIntervalMs: { min: 0, max: 10_000 },
+} as const;
+
+function clampInt(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number
+): number {
+  if (typeof value !== "number" && typeof value !== "string") return fallback;
+  const n = Number(value);
+  if (Number.isNaN(n)) return fallback;
+  // Infinity 可能是 JSON 里的 1e999：夹到对应方向的硬边界
+  if (!Number.isFinite(n)) return n > 0 ? max : min;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
+
+/** 把不可信的 Partial<CrawlConfig> 收敛成有界配置 */
+export function normalizeCrawlConfig(
+  input: Partial<CrawlConfig> | undefined
+): CrawlConfig {
+  const raw = { ...DEFAULT_CRAWL_CONFIG, ...(input ?? {}) };
+  return {
+    maxPages: clampInt(raw.maxPages, CRAWL_LIMITS.maxPages.min, CRAWL_LIMITS.maxPages.max, DEFAULT_CRAWL_CONFIG.maxPages),
+    maxDepth: clampInt(raw.maxDepth, CRAWL_LIMITS.maxDepth.min, CRAWL_LIMITS.maxDepth.max, DEFAULT_CRAWL_CONFIG.maxDepth),
+    concurrency: clampInt(raw.concurrency, CRAWL_LIMITS.concurrency.min, CRAWL_LIMITS.concurrency.max, DEFAULT_CRAWL_CONFIG.concurrency),
+    perPageTimeoutMs: clampInt(raw.perPageTimeoutMs, CRAWL_LIMITS.perPageTimeoutMs.min, CRAWL_LIMITS.perPageTimeoutMs.max, DEFAULT_CRAWL_CONFIG.perPageTimeoutMs),
+    totalBudgetMs: clampInt(raw.totalBudgetMs, CRAWL_LIMITS.totalBudgetMs.min, CRAWL_LIMITS.totalBudgetMs.max, DEFAULT_CRAWL_CONFIG.totalBudgetMs),
+    includeSubdomains: raw.includeSubdomains === true,
+    minRequestIntervalMs: clampInt(raw.minRequestIntervalMs, CRAWL_LIMITS.minRequestIntervalMs.min, CRAWL_LIMITS.minRequestIntervalMs.max, DEFAULT_CRAWL_CONFIG.minRequestIntervalMs),
+    ua:
+      typeof raw.ua === "string" && raw.ua.trim().length > 0
+        ? raw.ua.slice(0, 512)
+        : DEFAULT_CRAWL_CONFIG.ua,
+  };
+}
+
 function normalizeOrigin(input: string): { origin: string; startUrl: string } {
   const s = (input ?? "").trim();
   const withScheme = /^https?:\/\//i.test(s) ? s : `https://${s}`;
@@ -82,7 +132,7 @@ export async function crawlSite(
   const startedAtIso = new Date(startedAt).toISOString();
   const { origin, startUrl } = normalizeOrigin(input);
 
-  const config: CrawlConfig = { ...DEFAULT_CRAWL_CONFIG, ...(opts.config ?? {}) };
+  const config: CrawlConfig = normalizeCrawlConfig(opts.config);
   const fetcher: Fetcher = opts.fetcher ?? fetchWithPolicy;
 
   // 1. robots.txt
@@ -115,10 +165,14 @@ export async function crawlSite(
   type QueueItem = { url: string; depth: number };
   const seen = new Set<string>();
   const queue: QueueItem[] = [];
+  let queueCursor = 0;
+  const maxQueue = Math.max(config.maxPages * 50, 1_000);
   const enqueue = (url: string, depth: number): void => {
     const n = normalizeCrawlUrl(url);
     if (!n) return;
     if (seen.has(n)) return;
+    // 队列里尚未处理的项有上限：畸形站点（一页几万个链接）不能无限占内存
+    if (queue.length - queueCursor >= maxQueue) return;
     seen.add(n);
     queue.push({ url: n, depth });
   };
@@ -135,7 +189,9 @@ export async function crawlSite(
     const { url, depth } = item;
     const urlPath = (() => {
       try {
-        return new URL(url).pathname || "/";
+        const u = new URL(url);
+        // robots.txt 规则可以带 query（如 /search?q=），只传 pathname 会漏判
+        return `${u.pathname || "/"}${u.search}`;
       } catch {
         return "/";
       }
@@ -222,9 +278,13 @@ export async function crawlSite(
     const elapsedMs = Date.now() - reqStart;
 
     const finalUrl = res.finalUrl || url;
-    // 重定向链：attempts 不带 url，只能用 finalUrl 与请求 URL 的差异推断
+    // 优先使用 fetcher 记录的真实逐跳链；旧注入 fetcher 没这个字段时退回推断
     const redirectChain: string[] =
-      finalUrl !== url ? [finalUrl] : [];
+      res.redirectChain && res.redirectChain.length > 0
+        ? res.redirectChain
+        : finalUrl !== url
+          ? [finalUrl]
+          : [];
 
     // 4xx 5xx 处理（403 单独标 blocked）
     const status = res.status;
@@ -248,6 +308,14 @@ export async function crawlSite(
       clickDepth: depth,
       outLinks: [],
     };
+
+    // 重定向到站外：记录最终 URL，但不把外部页面当作本站内容分析。
+    // 否则站点图/内容重复检测会把别的域名内容算进站点。
+    if (!isSameDomain(finalUrl, origin, config.includeSubdomains)) {
+      page.statusReason = "off_domain_redirect";
+      pages.push(page);
+      return;
+    }
 
     if (status === 403) {
       page.blocked = { reason: "HTTP 403 Forbidden" };
@@ -296,6 +364,7 @@ export async function crawlSite(
     const internalLinkTargets: string[] = [];
     const outSeen = new Set<string>();
     for (const link of allLinks) {
+      if (internalLinkTargets.length >= 5_000) break;
       if (!isSameDomain(link, origin, config.includeSubdomains)) continue;
       if (isStaticAsset(link)) continue;
       const n = normalizeCrawlUrl(link);
@@ -316,29 +385,33 @@ export async function crawlSite(
     }
   }
 
-  // Worker pool —— 抢占式并发
-  let queueCursor = 0;
+  // 按 BFS 波次并发：每一波取当前队列里最多 concurrency 个 URL。
+  //
+  // 不能沿用「N 个 worker 各自 while(queueCursor < queue.length)」的写法：
+  // 起始队列只有 1 个 URL，其余 worker 会在 root 还没抓完时立刻退出，
+  // 实际并发退化为 1（见 tests/unit/crawler-concurrency.test.ts）。
   const runWorkers = async () => {
-    const workerCount = Math.max(1, config.concurrency);
-    const workers = Array.from({ length: workerCount }, async () => {
-      while (queueCursor < queue.length) {
-        const idx = queueCursor++;
-        if (idx >= queue.length) break;
-        const item = queue[idx];
-        if (!item) continue;
-        try {
-          await processOne(item);
-        } catch (e) {
-          // 单页失败不阻断整批
-          console.error(
-            "[geokit] crawl page 失败：",
-            item.url,
-            e instanceof Error ? e.message : e
-          );
-        }
-      }
-    });
-    await Promise.all(workers);
+    while (queueCursor < queue.length && !truncated) {
+      const batch = queue.slice(
+        queueCursor,
+        queueCursor + Math.max(1, config.concurrency)
+      );
+      queueCursor += batch.length;
+      await Promise.all(
+        batch.map(async (item) => {
+          try {
+            await processOne(item);
+          } catch (e) {
+            // 单页失败不阻断整批
+            console.error(
+              "[geokit] crawl page 失败：",
+              item.url,
+              e instanceof Error ? e.message : e
+            );
+          }
+        })
+      );
+    }
   };
 
   // 第一轮：基于起始页及其内链的 BFS 抓取
@@ -368,6 +441,13 @@ export async function crawlSite(
     if (toAdd.length > 0) {
       await runWorkers();
     }
+  }
+
+  // 并发波次里多个页面可能同时通过限额检查，最后统一裁掉超出部分
+  if (pages.length > config.maxPages) {
+    pages.length = config.maxPages;
+    truncated = true;
+    truncateReason = truncateReason ?? "达到最大页面数上限";
   }
 
   // 二次检查限额（避免最后一组 worker 刚超限未标 truncated）
@@ -435,6 +515,8 @@ async function persistCrawlObservation(
     result: {
       pages: result.pages,
       graph: result.graph,
+      // 带上站点问题聚合：opportunity 复检时按 issue.id 判断是否仍存在
+      issues: analyzeSiteIssues(result).issues,
       truncated: result.truncated,
       reason: result.reason,
       config: result.config,

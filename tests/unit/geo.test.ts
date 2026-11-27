@@ -341,3 +341,32 @@ describe("GEO Engine v1 & v2 (Unit Tests)", () => {
     });
   });
 });
+
+describe("GEO v2 评分回归", () => {
+  test("空正文不拿“句长适中”分（avgSentenceLength=0）", () => {
+    const audit = analyze(
+      "https://example.com/empty",
+      "<html><head><title>Empty</title></head><body></body></html>",
+      200,
+      50,
+      { geoVersion: "2.0.0" }
+    );
+    const readability = audit.geoBreakdown.find((b) => b.id === "readability");
+    assert.ok(readability);
+    assert.equal(readability.score, 0);
+  });
+
+  test("有数据点但没有结论性措辞，不算 Direct Answer", () => {
+    const longText = "2026年行业报告显示市场规模达到 120 亿元，同比增长 18%。".repeat(4);
+    const audit = analyze(
+      "https://example.com/data",
+      `<html><head><title>数据报告</title></head><body><main><article><h1>数据报告</h1><p>${longText}</p></article></main></body></html>`,
+      200,
+      50,
+      { geoVersion: "2.0.0" }
+    );
+    const quotability = audit.geoBreakdown.find((b) => b.id === "quotability");
+    assert.ok(quotability);
+    assert.doesNotMatch(quotability.comment, /Direct Answer|直接回答/);
+  });
+});

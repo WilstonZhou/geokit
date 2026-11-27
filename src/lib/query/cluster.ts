@@ -102,27 +102,17 @@ export function clusterQueries(
     parent[find(a)] = find(b);
   }
 
-  /** 簇内配对的 Jaccard 收集，便于最终算平均 */
-  const pairJaccards = new Map<number, number[]>();
-  /** 簇内共享 URL 收集 */
-  const clusterShared = new Map<number, Set<string>>();
-
+  // 先并查集分组，再在最终簇内重算配对指标。
+  //
+  // 不能边 union 边按当时的 root 记账：后续 union 会改变 root，
+  // 先前存下的配对值就永远读不到了（overlapScore 会只统计最后一对）。
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      const j_val = jaccard(urlSets[i], urlSets[j]);
+      const jVal = jaccard(urlSets[i], urlSets[j]);
       const shared = sharedCount(urlSets[i], urlSets[j]);
-      const hit = j_val >= opts.jaccardThreshold || shared.length >= opts.minSharedUrls;
-      if (!hit) continue;
-      union(i, j);
-      const root = find(i);
-      // 记录配对 Jaccard
-      const arr = pairJaccards.get(root) ?? [];
-      arr.push(j_val);
-      pairJaccards.set(root, arr);
-      // 记录共享 URL
-      const sharedSet = clusterShared.get(root) ?? new Set<string>();
-      for (const u of shared) sharedSet.add(u);
-      clusterShared.set(root, sharedSet);
+      const hit =
+        jVal >= opts.jaccardThreshold || shared.length >= opts.minSharedUrls;
+      if (hit) union(i, j);
     }
   }
 
@@ -139,11 +129,22 @@ export function clusterQueries(
   for (const [, idxList] of groups) {
     if (idxList.length < 2) continue; // 单元素簇不输出
     const queries = idxList.map((i) => inputs[i].query);
-    const root = find(idxList[0]);
-    const jVals = pairJaccards.get(root) ?? [];
-    const overlapScore =
-      jVals.length === 0 ? 0 : jVals.reduce((a, b) => a + b, 0) / jVals.length;
-    const sharedUrls = Array.from(clusterShared.get(root) ?? new Set<string>()).slice(0, 20);
+
+    // 簇内任意两 query 的平均 Jaccard（与注释承诺一致）
+    let pairSum = 0;
+    let pairCount = 0;
+    const sharedSet = new Set<string>();
+    for (let a = 0; a < idxList.length; a++) {
+      for (let b = a + 1; b < idxList.length; b++) {
+        pairSum += jaccard(urlSets[idxList[a]!]!, urlSets[idxList[b]!]!);
+        pairCount++;
+        for (const u of sharedCount(urlSets[idxList[a]!]!, urlSets[idxList[b]!]!)) {
+          sharedSet.add(u);
+        }
+      }
+    }
+    const overlapScore = pairCount === 0 ? 0 : pairSum / pairCount;
+    const sharedUrls = Array.from(sharedSet).slice(0, 20);
     out.push({
       id: makeClusterId(queries),
       queries,

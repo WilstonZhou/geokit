@@ -177,6 +177,20 @@ describe("T4-3 canonical 异常", () => {
     ]);
     assert.equal(typesOf(r).has("canonical-anomaly"), false);
   });
+
+  test("canonical 尾斜杠差异也能匹配到已爬页面", () => {
+    const r = makeResult([
+      makePage({
+        url: "https://example.com/a",
+        canonical: "https://example.com/dead/",
+      }),
+      makePage({ url: "https://example.com/dead", httpStatus: 404, canonical: null }),
+    ]);
+    const issue = issueOf(r, "canonical-anomaly");
+    assert.ok(issue);
+    assert.equal(issue!.severity, "high");
+    assert.ok(issue!.evidence.some((e) => e.value === 404));
+  });
 });
 
 /* 4. 孤岛 / 深页 / 内链过少 ----------------------------------------- */

@@ -679,7 +679,10 @@ function buildObservedProbe(args: {
       rawResponse: text,
       citedDomains: extractDomains(text),
       // 拒答文本里通常没有链接 → citationsStatus=unavailable，原因随记录走
-      citation: extractCitations(text, topic, base.providerName, false, brand, competitors),
+      citation: {
+        ...extractCitations(text, topic, base.providerName, false, brand, competitors),
+        determinable: false,
+      },
       servedModel,
       evidenceId,
       confidence: "unavailable",

@@ -214,17 +214,48 @@ function countWords(text: string): number {
   return cjk + en;
 }
 
-/** 各种日期写法 → YYYY-MM-DD；无法解析返回 null */
+function validYmd(y: number, mo: number, d: number): boolean {
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return (
+    dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() === mo - 1 &&
+    dt.getUTCDate() === d
+  );
+}
+
+/**
+ * 各种日期写法 → YYYY-MM-DD；无法解析返回 null。
+ *
+ * 关键点：带时区的 ISO 时间戳要保留**声明里的日历日期**，不能先转 UTC。
+ * 例如 2026-01-01T00:00:00+08:00 转 UTC 会变成 2025-12-31，
+ * 与页面 meta 的 2026-01-01 比较时产生假的“日期不一致”。
+ */
 export function normalizeDate(raw: string | null | undefined): string | null {
   if (!raw) return null;
-  const t = Date.parse(raw);
+  const s = raw.trim();
+
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s].*)?$/.exec(s);
+  if (iso) {
+    const y = Number(iso[1]);
+    const mo = Number(iso[2]);
+    const d = Number(iso[3]);
+    if (!validYmd(y, mo, d)) return null;
+    return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+
+  const t = Date.parse(s);
   if (Number.isFinite(t)) {
     return new Date(t).toISOString().slice(0, 10);
   }
-  const m = raw.match(/(20\d{2})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})/);
+
+  const m = s.match(/(20\d{2})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})/);
   if (m) {
-    const [, y, mo, d] = m;
-    return `${y}-${mo!.padStart(2, "0")}-${d!.padStart(2, "0")}`;
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const d = Number(m[3]);
+    if (!validYmd(y, mo, d)) return null;
+    return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   }
   return null;
 }

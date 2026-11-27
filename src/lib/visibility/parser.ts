@@ -1,7 +1,21 @@
 import type { ObservationStatus, CitationRecord } from "../evidence/types";
 
-const URL_REGEX = /(?:https?:\/\/|www\.)[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+(?:\/[^\s)\]>]*)?/g;
-const MD_LINK_REGEX = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+// URL 到空白、右括号、引号或中文标点为止；避免把“URL，这是后续说明”整段吞掉
+const URL_REGEX =
+  /(?:https?:\/\/|www\.)[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+(?:\/[^\s)\]}>"'，。；：！？、）】》]*)?/gi;
+// Markdown 链接允许 URL 内出现一层成对括号（如 Wikipedia 的 Foo_(bar)）
+const MD_LINK_REGEX =
+  /\[([^\]]+)\]\((https?:\/\/(?:[^()\s]|\([^()\s]*\))+)\)/gi;
+
+interface CitationCandidate {
+  url: string;
+  title?: string;
+  offset: number;
+}
+
+function trimUrlPunctuation(url: string): string {
+  return url.replace(/[.,;:!?，。；：！？、"'）】》]+$/, "");
+}
 
 export function extractCitations(
   rawResponse: string,
@@ -11,35 +25,40 @@ export function extractCitations(
   brand: string,
   competitors: string[] = []
 ): CitationRecord {
-  const citations: { url: string; title?: string; position?: number }[] = [];
-  const seenUrls = new Set<string>();
+  const candidates: CitationCandidate[] = [];
 
-  let match;
-  // Match Markdown links first
+  // Markdown 链接优先保留 title，最终仍按字符位置排序
+  let match: RegExpExecArray | null;
+  MD_LINK_REGEX.lastIndex = 0;
   while ((match = MD_LINK_REGEX.exec(rawResponse)) !== null) {
-    const title = match[1];
-    let url = match[2];
-    if (url.endsWith(")")) url = url.slice(0, -1);
-    if (!seenUrls.has(url)) {
-      seenUrls.add(url);
-      citations.push({ url, title, position: match.index });
-    }
+    candidates.push({
+      url: trimUrlPunctuation(match[2]!),
+      title: match[1],
+      offset: match.index,
+    });
   }
 
-  // Match raw URLs
+  URL_REGEX.lastIndex = 0;
   while ((match = URL_REGEX.exec(rawResponse)) !== null) {
-    let url = match[0];
+    let url = trimUrlPunctuation(match[0]);
     if (url.startsWith("www.")) url = "https://" + url;
-    if (url.endsWith(")")) url = url.slice(0, -1);
-    if (url.endsWith("]")) url = url.slice(0, -1);
-    if (url.endsWith(".")) url = url.slice(0, -1);
-    // 中文回答里 URL 常被全角句号收尾,需剥离,否则会污染域名统计
-    if (url.endsWith("。")) url = url.slice(0, -1);
-    
-    if (!seenUrls.has(url)) {
-      seenUrls.add(url);
-      citations.push({ url, position: match.index });
-    }
+    candidates.push({ url, offset: match.index });
+  }
+
+  candidates.sort((a, b) => a.offset - b.offset);
+
+  const citations: { url: string; title?: string; position?: number }[] = [];
+  const seenUrls = new Set<string>();
+  for (const c of candidates) {
+    if (!c.url || seenUrls.has(c.url)) continue;
+    seenUrls.add(c.url);
+    // position 是“回答中的第几个引用”（1 起），不是字符偏移。
+    // competitor/ai.ts 的 averageCitationPosition 依赖这个语义。
+    citations.push({
+      url: c.url,
+      title: c.title,
+      position: citations.length + 1,
+    });
   }
 
   const citationsStatus: ObservationStatus =

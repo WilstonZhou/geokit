@@ -6,7 +6,7 @@
  * 3. XML sitemap <xhtml:link rel="alternate" hreflang="..." href="...">
  */
 
-import { findTags, getMeta } from "../html";
+import { absolutize, findTags, getMeta, parseAttrs } from "../html";
 import type { HreflangEntry, PageInput, SitemapInput } from "./types";
 
 /** 从 HTML 提取 hreflang */
@@ -39,13 +39,19 @@ export function extractFromHttpHeaders(headers: Record<string, string>): Hreflan
   const linkHeader = headers["link"] ?? headers["Link"];
   if (!linkHeader) return entries;
 
-  // Link: <url1>; rel="alternate"; hreflang="en", <url2>; rel="alternate"; hreflang="zh-CN"
-  const linkRe = /<([^>]+)>\s*;\s*rel="alternate"\s*;\s*hreflang="([^"]+)"/gi;
+  // Link: <url1>; rel="alternate"; hreflang="en", <url2>; ...
+  // 参数顺序与额外参数（type/title）都可能变化，不能依赖固定顺序。
+  const valueRe = /<([^>]+)>([^,]*)/g;
   let m: RegExpExecArray | null;
-  while ((m = linkRe.exec(linkHeader)) !== null) {
+  while ((m = valueRe.exec(linkHeader)) !== null) {
+    const url = m[1];
+    const params = m[2] ?? "";
+    const rel = /;\s*rel\s*=\s*"?([^";\s]+)"?/i.exec(params)?.[1];
+    const lang = /;\s*hreflang\s*=\s*"?([^";\s]+)"?/i.exec(params)?.[1];
+    if (!rel || rel.toLowerCase() !== "alternate" || !lang) continue;
     entries.push({
-      lang: m[2],
-      url: m[1],
+      lang,
+      url,
       source: "http-header",
       raw: m[0],
     });
@@ -67,12 +73,16 @@ export function extractFromSitemap(xml: string): Map<string, HreflangEntry[]> {
     const inner = urlMatch[2];
     const pageEntries: HreflangEntry[] = [];
 
-    const linkRe = /<xhtml:link\s+rel="alternate"\s+hreflang="([^"]+)"\s+href="([^"]+)"\s*\/>/gi;
+    const linkRe = /<(?:[\w.-]+:)?link\b([^>]*?)\/?>/gi;
     let linkMatch: RegExpExecArray | null;
     while ((linkMatch = linkRe.exec(inner)) !== null) {
+      const attrs = parseAttrs(linkMatch[1] ?? "");
+      if (attrs.rel?.toLowerCase() !== "alternate") continue;
+      if (!attrs.hreflang || !attrs.href) continue;
       pageEntries.push({
-        lang: linkMatch[1],
-        url: linkMatch[2],
+        lang: attrs.hreflang,
+        // sitemap 里的 href 通常是绝对地址；相对地址也按所在页面解析
+        url: absolutize(attrs.href, pageUrl),
         source: "sitemap",
         raw: linkMatch[0],
       });
@@ -97,7 +107,11 @@ export function extractFromPage(page: PageInput): HreflangEntry[] {
     entries.push(...extractFromHttpHeaders(page.headers));
   }
 
-  return entries;
+  // 相对 href 先解析成绝对 URL，否则自引用/回链/canonical 检查全部对不上
+  return entries.map((e) => ({
+    ...e,
+    url: absolutize(e.url, page.url),
+  }));
 }
 
 /** 从 sitemap 输入提取全部 hreflang */

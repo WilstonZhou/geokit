@@ -28,10 +28,11 @@ function collectTypes(sources: SchemaSource[]): string[] {
 
 /** 确定 Schema 维度 gap（类型越多越好） */
 function determineSchemaGap(
-  userCount: number,
+  userCount: number | null,
   compCounts: number[]
 ): "behind" | "ahead" | "parity" | "incomparable" {
-  if (userCount === 0 && compCounts.every((c) => c === 0)) return "incomparable";
+  // 任一侧没有可用观测就不能下 ahead/behind 结论
+  if (userCount === null || compCounts.length === 0) return "incomparable";
   if (compCounts.some((c) => c > userCount)) return "behind";
   if (compCounts.some((c) => c < userCount)) return "ahead";
   return "parity";
@@ -70,11 +71,13 @@ export function compareStructuredData(
   const competitorValues: CompetitorDimensionValue<SchemaComparison>[] =
     competitorSources.map((cs) => {
       const types = collectTypes(cs.sources ?? []);
-      const status: CompetitorStatus = (cs.sources?.length ?? 0) > 0 ? "available" : "unavailable";
+      const status: CompetitorStatus =
+        (cs.sources?.length ?? 0) > 0 ? "available" : "unavailable";
       return {
         domain: cs.domain,
-        value: { types, typeCount: types.length },
+        value: status === "available" ? { types, typeCount: types.length } : null,
         status,
+        statusReason: status === "available" ? undefined : "竞品无页面审计数据",
         evidence: [
           { signal: "schema.typeCount", source: `PageAudit[] (${cs.domain})`, value: types.length },
           { signal: "schema.types", source: `PageAudit[] (${cs.domain})`, value: types.join(",") || "none" },
@@ -82,19 +85,28 @@ export function compareStructuredData(
       };
     });
 
-  const compCounts = competitorValues.map((c) => c.value?.typeCount ?? 0);
-  const gap = determineSchemaGap(userTypes.length, compCounts);
+  // 只让有可用数据的竞品参与 gap；unavailable 不能按 0 种类型算
+  const availableComps = competitorValues.filter(
+    (c) => c.status === "available" && c.value !== null
+  );
+  const compCounts = availableComps.map((c) => c.value!.typeCount);
+  const gap = determineSchemaGap(
+    userStatus === "available" ? userTypes.length : null,
+    compCounts
+  );
 
   let summary: string;
-  if (gap === "incomparable") {
-    summary = "用户与竞品均无结构化数据。";
+  if (userStatus !== "available") {
+    summary = "未提供用户页面审计数据，无法对比结构化数据。";
+  } else if (compCounts.length === 0) {
+    summary = "竞品没有可用的结构化数据，无法对比。";
   } else if (gap === "behind") {
-    const leaders = competitorValues
-      .filter((c) => (c.value?.typeCount ?? 0) > userTypes.length)
+    const leaders = availableComps
+      .filter((c) => c.value!.typeCount > userTypes.length)
       .map((c) => `${c.domain}(${c.value!.typeCount}种)`);
     summary = `用户覆盖 ${userTypes.length} 种 Schema，落后：${leaders.join("、")}`;
   } else if (gap === "ahead") {
-    summary = `用户覆盖 ${userTypes.length} 种 Schema，领先全部竞品。`;
+    summary = `用户覆盖 ${userTypes.length} 种 Schema，领先所有有数据的竞品。`;
   } else {
     summary = `用户与竞品 Schema 覆盖面持平（${userTypes.length} 种）。`;
   }
@@ -103,10 +115,10 @@ export function compareStructuredData(
   if (gap === "behind") {
     // 找出竞品有、用户没有的类型
     const userSet = new Set(userTypes);
-    const missingByComp = competitorValues
-      .filter((c) => (c.value?.typeCount ?? 0) > userTypes.length)
+    const missingByComp = availableComps
+      .filter((c) => c.value!.typeCount > userTypes.length)
       .map((c) => {
-        const missing = (c.value!.types).filter((t) => !userSet.has(t));
+        const missing = c.value!.types.filter((t) => !userSet.has(t));
         return `${c.domain}: 缺 ${missing.join(",")}`;
       });
     gapDetail = missingByComp.join("；");
@@ -114,8 +126,12 @@ export function compareStructuredData(
 
   return {
     dimension: "schema",
-    userValue: { types: userTypes, typeCount: userTypes.length },
+    userValue:
+      userStatus === "available"
+        ? { types: userTypes, typeCount: userTypes.length }
+        : null,
     userStatus,
+    userStatusReason: userStatus === "available" ? undefined : "未提供用户页面审计数据",
     userEvidence,
     competitorValues,
     summary,

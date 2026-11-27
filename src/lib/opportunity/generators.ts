@@ -28,6 +28,7 @@ import type { SchemaDiagnosis } from "../schema/types";
 import type { CruxObservation } from "../crux/types";
 import { METRIC_LABELS } from "../crux/types";
 import { getDomain } from "../html";
+import { missingEntityKinds } from "./signals";
 
 /* ------------------------------------------------------------------ */
 /* 公共工具                                                            */
@@ -171,8 +172,10 @@ export function genCitationGap(
       ],
       sources: [],
       verification: {
-        signalKey: "mentioned",
+        // target 是竞品域名（描述缺口），复检要看的是用户域名是否开始被引用
+        signalKey: "citedDomains",
         direction: "appear",
+        verificationTarget: uDomain,
         description: `下次复检时用户域名 ${uDomain} 应被该 query 的 AI 答案引用`,
       },
       affectedScope: 1,
@@ -261,7 +264,8 @@ export function genAiCrawlProtocol(
       ],
       sources: [],
       verification: {
-        signalKey: "llmsTxt.exists",
+        // llms_txt Observation 的 result 顶层字段就是 exists
+        signalKey: "exists",
         direction: "appear",
         description: "下次复检时站点根目录应存在合规 llms.txt",
       },
@@ -309,8 +313,13 @@ export function genSiteIssueHigh(
       ],
       sources: [],
       verification: {
-        signalKey: "issueResolved",
+        // crawl Observation 现在会携带 site issues；按 issue id 判断是否仍存在。
+        // 没有具体 affectedUrl 时无法定位站点，只能人工复检。
+        signalKey: "issuePresent",
         direction: "disappear",
+        issueId: issue.id,
+        issueType: issue.type,
+        manual: issue.affectedUrls.length === 0,
         description: `下次复检时 ${issue.type} 应不再出现在该目标上`,
       },
       affectedScope: issue.affectedUrls.length,
@@ -393,74 +402,42 @@ export function genSearchOpportunity(
 /* 6. missing-entity —— 作者/组织/发布时间/Schema 缺失                 */
 /* ------------------------------------------------------------------ */
 
-const SCHEMA_TYPES_WITH_DATE = new Set([
-  "Article",
-  "BlogPosting",
-  "NewsArticle",
-  "TechArticle",
-  "Recipe",
-  "Product",
-  "Event",
-]);
-
 /** 检测单页缺失哪些实体信号 —— 返回缺失项与对应建议 */
 function detectMissingEntities(audit: PageAudit): {
   missing: string[];
   evidence: OpportunityEvidenceRef[];
   recommendations: Recommendation[];
 } {
-  const missing: string[] = [];
+  const missing = missingEntityKinds(audit);
   const evidence: OpportunityEvidenceRef[] = [];
   const recommendations: Recommendation[] = [];
 
-  // Schema 缺失
-  if (audit.jsonLdTypes.length === 0 && audit.wordCount >= 100) {
-    missing.push("Schema");
-    evidence.push({ signal: "jsonLdTypes", value: "[]" });
-    recommendations.push({
-      action: "为该页面添加 JSON-LD 结构化数据",
-      detail: "按页面类型选择 Article / Product / Organization 等",
-    });
-  }
-
-  // 作者缺失：ogTags 没有 article:author 且 jsonLdTypes 不含 Person/Article
-  const hasAuthor =
-    audit.ogTags["article:author"] ||
-    audit.ogTags["og:article:author"] ||
-    audit.jsonLdTypes.some((t) => t === "Person" || t === "Article");
-  if (!hasAuthor) {
-    missing.push("作者");
-    evidence.push({ signal: "og:article:author", value: "(missing)" });
-    recommendations.push({
-      action: "明确标注页面作者",
-      detail: "可用 og:article:author 或 JSON-LD Person",
-    });
-  }
-
-  // 组织缺失：ogTags 没有 og:site_name 且 jsonLdTypes 不含 Organization
-  const hasOrg =
-    audit.ogTags["og:site_name"] ||
-    audit.jsonLdTypes.some((t) => t === "Organization");
-  if (!hasOrg) {
-    missing.push("组织");
-    evidence.push({ signal: "og:site_name", value: "(missing)" });
-    recommendations.push({
-      action: "标注发布组织",
-      detail: "可用 og:site_name 或 JSON-LD Organization",
-    });
-  }
-
-  // 发布时间缺失：ogTags 没有 article:published_time 且 jsonLdTypes 不含带日期的类型
-  const hasDate =
-    audit.ogTags["article:published_time"] ||
-    audit.jsonLdTypes.some((t) => SCHEMA_TYPES_WITH_DATE.has(t));
-  if (!hasDate) {
-    missing.push("发布时间");
-    evidence.push({ signal: "article:published_time", value: "(missing)" });
-    recommendations.push({
-      action: "标注发布时间",
-      detail: "可用 article:published_time 或 JSON-LD datePublished",
-    });
+  for (const kind of missing) {
+    if (kind === "Schema") {
+      evidence.push({ signal: "jsonLdTypes", value: "[]" });
+      recommendations.push({
+        action: "为该页面添加 JSON-LD 结构化数据",
+        detail: "按页面类型选择 Article / Product / Organization 等",
+      });
+    } else if (kind === "作者") {
+      evidence.push({ signal: "og:article:author", value: "(missing)" });
+      recommendations.push({
+        action: "明确标注页面作者",
+        detail: "可用 og:article:author 或 JSON-LD Person",
+      });
+    } else if (kind === "组织") {
+      evidence.push({ signal: "og:site_name", value: "(missing)" });
+      recommendations.push({
+        action: "标注发布组织",
+        detail: "可用 og:site_name 或 JSON-LD Organization",
+      });
+    } else {
+      evidence.push({ signal: "article:published_time", value: "(missing)" });
+      recommendations.push({
+        action: "标注发布时间",
+        detail: "可用 article:published_time 或 JSON-LD datePublished",
+      });
+    }
   }
 
   return { missing, evidence, recommendations };
@@ -493,9 +470,10 @@ export function genMissingEntity(
       recommendations,
       sources: audit.evidenceId ? [audit.evidenceId] : [],
       verification: {
-        signalKey: "hasEntity",
-        direction: "appear",
-        description: "下次复检时该页面应具备完整作者/组织/发布时间/Schema 信号",
+        // 复检时用同一个 missingEntityKinds() 计算缺失数，减少到 0 即解决
+        signalKey: "missingEntityCount",
+        direction: "decrease",
+        description: `下次复检时该页面的实体缺失数应降为 0（当前 ${missing.length}）`,
       },
       affectedScope: missing.length,
     });
@@ -615,9 +593,11 @@ export function genSchemaIssue(
       recommendations,
       sources: [],
       verification: {
+        // 当前没有字段级 Schema Observation，不能假装可自动复检
         signalKey: "schemaMissingRequiredCount",
         direction: "decrease",
-        description: `下次复检时该 URL 的 Schema 必填缺失数应降为 0（当前 ${requiredMissing.length}）`,
+        manual: true,
+        description: `需人工复检：该 URL 的 Schema 必填缺失数应降为 0（当前 ${requiredMissing.length}）`,
       },
       affectedScope:
         requiredMissing.length + recommendedGap.length + d.consistencyIssues.length,
@@ -703,7 +683,8 @@ export function genPoorWebVitals(
       recommendations,
       sources: [],
       verification: {
-        signalKey: "crux.overallCategory",
+        // result 顶层是 overallCategory（FAST/AVERAGE/SLOW/NONE），不是 crux.* 嵌套
+        signalKey: "overallCategory",
         direction: "increase",
         description: `下次复检时该 URL 的 CrUX overallCategory 应提升（当前 ${obs.overallCategory}）`,
       },

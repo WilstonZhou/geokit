@@ -219,3 +219,21 @@ describe("Diff Engine (Unit Tests)", () => {
     });
   });
 });
+
+describe("Diff Engine 回归：缺失 targetRank 不等于进出榜单", () => {
+  it("两侧都缺 targetRank → 不产生变化", () => {
+    const a = sampleObs({ type: "rank", subject: "search:x", result: {} });
+    const b = sampleObs({ type: "rank", subject: "search:x", result: {} });
+    const diff = diffObservations(a, b);
+    assert.strictEqual(diff.comparable, true);
+    assert.strictEqual(diff.summary.improved, 0);
+    assert.strictEqual(diff.summary.degraded, 0);
+  });
+
+  it("从缺失变为有值才算是“进入榜单”", () => {
+    const a = sampleObs({ type: "rank", subject: "search:x", result: {} });
+    const b = sampleObs({ type: "rank", subject: "search:x", result: { targetRank: 5 } });
+    const diff = diffObservations(a, b);
+    assert.strictEqual(diff.summary.improved, 1);
+  });
+});

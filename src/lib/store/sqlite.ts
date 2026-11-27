@@ -46,6 +46,7 @@ import { randomUUID } from "node:crypto";
 
 import type { Evidence, Observation } from "../evidence/types";
 import { keyOf } from "./hash";
+import { canonicalIso } from "./time";
 import type {
   EvidenceQuery,
   ListOptions,
@@ -176,6 +177,7 @@ export class SqliteStore implements Store {
     }
 
     const record = clone(ev);
+    record.observedAt = canonicalIso(record.observedAt);
     record.dedupeKey = dedupeKey;
 
     if (opts?.body && record.response.bodyRetained) {
@@ -250,11 +252,11 @@ export class SqliteStore implements Store {
     }
     if (q.from) {
       w.push("observed_at >= ?");
-      p.push(q.from);
+      p.push(canonicalIso(q.from));
     }
     if (q.to) {
       w.push("observed_at <= ?");
-      p.push(q.to);
+      p.push(canonicalIso(q.to));
     }
     return { sql: `WHERE ${w.join(" AND ")}`, params: p };
   }
@@ -296,7 +298,14 @@ export class SqliteStore implements Store {
         // 同 run + 同版本重算 → materialized replacement，保留 id。
         // replaces 沿用原值：幂等重算不产生新的 replaces 关系，链不增长。
         const prev = JSON.parse(hit.data) as Observation;
-        const next: Observation = { ...clone(obs), id: prev.id, identityKey, versionKey, replaces: prev.replaces };
+        const next: Observation = {
+          ...clone(obs),
+          id: prev.id,
+          observedAt: canonicalIso(obs.observedAt),
+          identityKey,
+          versionKey,
+          replaces: prev.replaces,
+        };
         this.writeObservation(next, identityKey, versionKey, replacementKey);
         return { id: next.id, created: false, replaced: prev.id };
       }
@@ -321,6 +330,7 @@ export class SqliteStore implements Store {
     const next: Observation = {
       ...clone(obs),
       id,
+      observedAt: canonicalIso(obs.observedAt),
       identityKey,
       versionKey,
       metadata: opts?.idempotencyKey
@@ -409,11 +419,11 @@ export class SqliteStore implements Store {
     }
     if (q.from) {
       w.push("observed_at >= ?");
-      p.push(q.from);
+      p.push(canonicalIso(q.from));
     }
     if (q.to) {
       w.push("observed_at <= ?");
-      p.push(q.to);
+      p.push(canonicalIso(q.to));
     }
 
     const rows = this.db

@@ -42,6 +42,7 @@ export const CitationRecordSchema = z.object({
   ),
   citationsStatus: z.string(),
   competitorsMentioned: z.array(z.string()),
+  determinable: z.boolean().optional(),
   observedAt: z.string(),
 });
 

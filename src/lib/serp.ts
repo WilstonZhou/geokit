@@ -540,8 +540,8 @@ export async function fetchSerp(
         ...base,
         status: "blocked",
         note: isAbort(msg)
-          ? `采集超时（${FETCH_TIMEOUT_MS / 1000}s）。${engine.name}对直连采集有风控，生产环境建议走住宅代理或在服务端配置 "${engine.name.toUpperCase()}_PROXY"。`
-          : `请求失败：${msg}。${engine.name}可能会拦截服务端直连请求，生产环境建议配置代理。`,
+          ? `采集超时（${FETCH_TIMEOUT_MS / 1000}s）。${engine.name}对服务端直连有风控；GEOkit 未内置代理，可在网络层自行配置出口。`
+          : `请求失败：${msg}。${engine.name}可能会拦截服务端直连请求。`,
       };
       await emitObservation(blocked);
       return blocked;

@@ -141,3 +141,77 @@ describe("T2: Citation Diff（同一 query 集合前后两次观测）", () => {
     assert.equal(entry.hasPrevious, false);
   });
 });
+
+describe("T2: Citation parser 回归", () => {
+  it("URL 不吞掉后面的中文正文", () => {
+    const result = extractCitations(
+      "详见 https://example.com/a，这是后续说明，另见 https://example.com/b。",
+      "q",
+      "m",
+      false,
+      "brand"
+    );
+    assert.deepEqual(
+      result.citations.map((c) => c.url),
+      ["https://example.com/a", "https://example.com/b"]
+    );
+  });
+
+  it("Markdown 链接中的成对括号 URL 不被截断", () => {
+    const result = extractCitations(
+      "参考 [维基](https://en.wikipedia.org/wiki/Foo_(bar)) 的定义。",
+      "q",
+      "m",
+      false,
+      "brand"
+    );
+    assert.equal(
+      result.citations[0]!.url,
+      "https://en.wikipedia.org/wiki/Foo_(bar)"
+    );
+  });
+
+  it("position 是 1 起的引用序号，不是字符偏移", () => {
+    const result = extractCitations(
+      "先看 https://a.example/x 再看 [b](https://b.example/y)",
+      "q",
+      "m",
+      false,
+      "brand"
+    );
+    assert.deepEqual(
+      result.citations.map((c) => c.position),
+      [1, 2]
+    );
+  });
+});
+
+describe("T2: Citation diff 与 INDETERMINATE", () => {
+  function rec(over: Partial<CitationRecord>): CitationRecord {
+    return {
+      query: "q1",
+      model: "m1",
+      answerText: "",
+      mentioned: false,
+      citations: [],
+      citationsStatus: "unavailable",
+      competitorsMentioned: [],
+      observedAt: "2026-10-01T00:00:00Z",
+      ...over,
+    };
+  }
+
+  it("前值可判定有提及、当前拒答 → indeterminate，不记 lost", () => {
+    const prev = [rec({ mentioned: true, determinable: true, citationsStatus: "ok" })];
+    const cur = [rec({ mentioned: false, determinable: false, observedAt: "2026-10-08T00:00:00Z" })];
+    const out = diffCitationRecords(prev, cur);
+    assert.equal(out[0]!.mention, "indeterminate");
+  });
+
+  it("前值拒答、当前明确提及 → added", () => {
+    const prev = [rec({ mentioned: false, determinable: false })];
+    const cur = [rec({ mentioned: true, determinable: true, citationsStatus: "ok", observedAt: "2026-10-08T00:00:00Z" })];
+    const out = diffCitationRecords(prev, cur);
+    assert.equal(out[0]!.mention, "added");
+  });
+});

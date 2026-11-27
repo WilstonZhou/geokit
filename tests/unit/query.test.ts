@@ -474,3 +474,27 @@ describe("T7-7 INTENT_PRIORITY 透明", () => {
     assert.strictEqual(INTENT_PRIORITY.informational, 4);
   });
 });
+
+test("clusterQueries: 三 query 链式同簇时 overlapScore 统计所有命中配对", () => {
+  // q1={a,b,c} q2={b,c,d} q3={c,d,e}
+  // q1↔q2=0.5, q2↔q3=0.5, q1↔q3=0.2 → 平均 0.4
+  const makeQ = (name: string, urls: string[]): QueryClusterInput => ({
+    query: name,
+    serpResults: [
+      makeSerp({
+        items: urls.map((url, i) => makeItem({ position: i + 1, url })),
+      }),
+    ],
+  });
+  const out = clusterQueries([
+    makeQ("q1", ["https://x.com/a", "https://x.com/b", "https://x.com/c"]),
+    makeQ("q2", ["https://x.com/b", "https://x.com/c", "https://x.com/d"]),
+    makeQ("q3", ["https://x.com/c", "https://x.com/d", "https://x.com/e"]),
+  ]);
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(out[0]!.queries.length, 3);
+  assert.ok(
+    Math.abs(out[0]!.overlapScore - 0.4) < 1e-9,
+    `overlapScore=${out[0]!.overlapScore}`
+  );
+});

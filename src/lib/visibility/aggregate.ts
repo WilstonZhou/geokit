@@ -65,8 +65,12 @@ export interface CitationDiffEntry {
   model: string;
   /** false = 存档里没有更早的同 (query, model) 记录，无从比较 */
   hasPrevious: boolean;
-  /** 相对上一次：新增提及 / 失去提及 / 无变化；无前值时为 null */
-  mention: "added" | "lost" | "unchanged" | null;
+  /**
+   * 相对上一次：新增提及 / 失去提及 / 无变化 / 无法判定。
+   * indeterminate = 至少一侧是模型拒答等低信号回答，不能把“没回答”记为 lost。
+   * 无前值时为 null。
+   */
+  mention: "added" | "lost" | "unchanged" | "indeterminate" | null;
   /** 本次新增的引用 URL */
   citationsAdded: string[];
   /** 上次有、本次消失的引用 URL */
@@ -111,12 +115,21 @@ export function diffCitationRecords(
     const prevUrls = new Set(p.citations.map((x) => x.url));
     const curUrls = new Set(c.citations.map((x) => x.url));
 
-    const mention =
-      p.mentioned === c.mentioned
-        ? "unchanged"
-        : c.mentioned
-          ? "added"
-          : "lost";
+    // determinable=false 表示模型拒答/低信号：mentioned=false 不能当作
+    // “确认没有提及”。只有两侧都可判定时才做 added/lost 判定。
+    const prevKnown = p.determinable !== false;
+    const curKnown = c.determinable !== false;
+
+    let mention: CitationDiffEntry["mention"];
+    if (c.mentioned && curKnown) {
+      mention = p.mentioned && prevKnown ? "unchanged" : "added";
+    } else if (p.mentioned && prevKnown && curKnown) {
+      mention = "lost";
+    } else if (!prevKnown || !curKnown) {
+      mention = "indeterminate";
+    } else {
+      mention = "unchanged";
+    }
 
     return {
       query: c.query,

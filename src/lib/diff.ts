@@ -338,7 +338,11 @@ function diffTargetRank(prev: Observation, cur: Observation): DiffChange | null 
   const a = getPath(prev, "result.targetRank");
   const b = getPath(cur, "result.targetRank");
 
-  if (a === null && b === null) return null;
+  // getPath 缺失返回 undefined；必须把 undefined 与 null 都当作“无值”，
+  // 否则两侧都缺 targetRank 时会凭空产生“进入榜单”的变化。
+  if ((a === null || a === undefined) && (b === null || b === undefined)) {
+    return null;
+  }
 
   const path = "result.targetRank";
   if (a === null || a === undefined) {

@@ -429,6 +429,7 @@ describe("T10 schema-issue opportunity", () => {
     );
     assert.equal(opp!.verification.signalKey, "schemaMissingRequiredCount");
     assert.equal(opp!.verification.direction, "decrease");
+    assert.equal(opp!.verification.manual, true);
   });
 
   it("完整页面 → 不产生 schema-issue 机会（无 evidence 不输出）", () => {
@@ -482,5 +483,38 @@ describe("T10 analyzeSchema 建议", () => {
     const d = analyzeSchema("https://x.com/a14", html);
     assert.ok(d.recommendations.some((r) => r.includes("generate_schema_draft")));
     assert.ok(d.recommendations.some((r) => r.includes("Article")));
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 回归：日期规范化 / sourcedFrom 可追溯                                */
+/* ------------------------------------------------------------------ */
+
+describe("Schema 日期与草稿可追溯性回归", () => {
+  it("带时区偏移的日期保留声明中的日历日期", async () => {
+    const { normalizeDate } = await import("../../src/lib/schema/extract");
+    assert.equal(normalizeDate("2026-01-01T00:00:00+08:00"), "2026-01-01");
+    assert.equal(normalizeDate("2026-01-01T00:00:00-05:00"), "2026-01-01");
+  });
+
+  it("非法日期返回 null，不把 2026-13-45 原样放行", async () => {
+    const { normalizeDate } = await import("../../src/lib/schema/extract");
+    assert.equal(normalizeDate("2026-13-45"), null);
+    assert.equal(normalizeDate("2026-02-30"), null);
+  });
+
+  it("已存在的 JSON-LD 字段：sourcedFrom 记录草稿实际保留值", () => {
+    const html = `<html><head>${ld({
+      "@type": "Article",
+      headline: "已有标题",
+      datePublished: "2026-01-01",
+      dateModified: "2026-01-01",
+    })}<meta property="article:modified_time" content="2026-09-01"></head>
+    <body><h1>已有标题</h1></body></html>`;
+    const draft = buildSchemaDraft("https://x.com/date", html);
+    const parsed = asObj(JSON.parse(draft.jsonLdString!));
+    assert.equal(parsed.dateModified, "2026-01-01");
+    const source = draft.sourcedFrom.find((s) => s.field === "dateModified");
+    assert.equal(source?.value, "2026-01-01");
   });
 });
