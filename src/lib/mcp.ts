@@ -23,7 +23,11 @@ import { getSearchPerformance, analyzeSearchPerformance, type GscDimension } fro
  * 一旦某侧修改，Agent 的决策依据就会静默漂移，而没有任何测试会发现。
  */
 import { searchRankings } from "./services/serp";
-import { probeVisibility, samplingProfile, batchProbeVisibility } from "./services/visibility";
+import {
+  probeVisibility,
+  samplingProfile,
+  batchProbeVisibilityDetailed,
+} from "./services/visibility";
 import { analyzeCitations, diffCitationRecords } from "./visibility/aggregate";
 import { checkUrl, checkHtml, autoFixHtml } from "./services/diagnosis";
 import { listObservationHistory, latestObservationDiff } from "./services/observations";
@@ -354,8 +358,8 @@ export const TOOLS: ToolDef[] = [
         type: { type: "string", description: "观测类型：'rank' | 'geo_score' | 'ai_mention' | 'robots_policy' | 'llms_txt'" },
         source: { type: "string", description: "观测来源（如 'search-engine:baidu' 或 'provider:deepseek'）" },
         to: { type: "string", description: "时间上限（ISO 格式字符串）" },
-        prev: { type: "object", description: "前一次观测的 JSON 对象（文件/内联模式）" },
-        curr: { type: "object", description: "本次观测的 JSON 对象（文件/内联模式）" },
+        prev: { type: "object", description: "前一次观测的 JSON 对象（内联）" },
+        curr: { type: "object", description: "本次观测的 JSON 对象（内联）" },
       },
     },
   },
@@ -593,7 +597,6 @@ export const TOOLS: ToolDef[] = [
           enum: ["DESKTOP", "PHONE", "TABLET"],
           description: "设备类型（可选，缺省聚合全部）",
         },
-        concurrency: { type: "number", description: "并发上限（默认 2，遵守官方 150 QPM 限制）" },
         minIntervalMs: { type: "number", description: "同 host 最小请求间隔 ms（默认 500）" },
       },
     },
@@ -709,7 +712,7 @@ const TOOL_SCHEMAS: Record<string, z.ZodTypeAny> = {
   list_engines: z.record(z.string(), z.unknown()).optional(),
   check_serp_ranking: z.object({
     keyword: z.string().trim().min(1, "缺少 keyword"),
-    engines: z.array(z.string()).optional(),
+    engines: z.array(z.string()).max(7).optional(),
     group: z.enum(["cn", "global", "all"]).optional(),
     targetDomain: z.string().optional(),
     pages: z.union([z.number(), z.string()]).optional(),
@@ -719,16 +722,16 @@ const TOOL_SCHEMAS: Record<string, z.ZodTypeAny> = {
     geo_version: z.enum(["1.0.0", "2.0.0"]).optional(),
   }).passthrough(),
   analyze_ai_citations: z.object({
-    queries: z.array(z.string()).min(1, "缺少 queries 列表"),
+    queries: z.array(z.string()).min(1, "缺少 queries 列表").max(50),
     brand: z.string().trim().min(1, "缺少 brand"),
     domain: z.string().trim().min(1, "缺少 domain"),
-    competitors: z.array(z.string()).optional(),
+    competitors: z.array(z.string()).max(20).optional(),
     concurrency: z.union([z.number(), z.string()]).optional(),
   }).passthrough(),
   check_ai_visibility: z.object({
     brand: z.string().trim().min(1, "缺少 brand"),
     topic: z.string().trim().min(1, "缺少 topic"),
-    competitors: z.array(z.string()).optional(),
+    competitors: z.array(z.string()).max(20).optional(),
   }).passthrough(),
   crawl_site: z.object({
     site: z.string().trim().min(1, "缺少 site"),
@@ -740,15 +743,15 @@ const TOOL_SCHEMAS: Record<string, z.ZodTypeAny> = {
     siteUrl: z.string().trim().min(1, "缺少 siteUrl"),
     startDate: z.string().optional(),
     endDate: z.string().optional(),
-    dimensions: z.array(z.string()).optional(),
+    dimensions: z.array(z.string()).max(5).optional(),
     rowLimit: z.union([z.number(), z.string()]).optional(),
   }).passthrough(),
   analyze_search_opportunities: z.object({
     siteUrl: z.string().trim().min(1, "缺少 siteUrl"),
     startDate: z.string().optional(),
     endDate: z.string().optional(),
-    dimensions: z.array(z.string()).optional(),
-    crawledUrls: z.array(z.string()).optional(),
+    dimensions: z.array(z.string()).max(5).optional(),
+    crawledUrls: z.array(z.string()).max(100).optional(),
   }).passthrough(),
   analyze_robots: z.object({
     site: z.string().trim().min(1, "缺少 site"),
@@ -807,8 +810,8 @@ const TOOL_SCHEMAS: Record<string, z.ZodTypeAny> = {
   }).passthrough(),
   verify_opportunity: z.object({
     opportunity: z.record(z.string(), z.unknown()),
-    prevObservations: z.array(z.unknown()),
-    currObservations: z.array(z.unknown()),
+    prevObservations: z.array(z.unknown()).max(500),
+    currObservations: z.array(z.unknown()).max(500),
   }).passthrough(),
   analyze_query: z.object({
     query: z.string().trim().min(1, "缺少 query"),
@@ -819,34 +822,33 @@ const TOOL_SCHEMAS: Record<string, z.ZodTypeAny> = {
     userDomain: z.string().optional(),
   }).passthrough(),
   cluster_queries: z.object({
-    queries: z.array(z.record(z.string(), z.unknown())).min(1, "queries 数组不能为空"),
+    queries: z.array(z.record(z.string(), z.unknown())).min(1, "queries 数组不能为空").max(100),
     jaccardThreshold: z.union([z.number(), z.string()]).optional(),
     minSharedUrls: z.union([z.number(), z.string()]).optional(),
   }).passthrough(),
   compare_competitors: z.object({
     userDomain: z.string().trim().min(1, "缺少 userDomain"),
-    competitors: z.array(z.string()).min(1, "至少需要 1 个竞品域名"),
-    queries: z.array(z.string()).optional(),
-    serpResults: z.array(z.unknown()).optional(),
-    aiCitations: z.array(z.unknown()).optional(),
-    userPageAudits: z.array(z.unknown()).optional(),
-    competitorPageAudits: z.array(z.unknown()).optional(),
-    competitorPageUrls: z.array(z.string()).optional(),
+    competitors: z.array(z.string()).min(1, "至少需要 1 个竞品域名").max(5),
+    queries: z.array(z.string()).max(100).optional(),
+    serpResults: z.array(z.unknown()).max(50).optional(),
+    aiCitations: z.array(z.unknown()).max(500).optional(),
+    userPageAudits: z.array(z.unknown()).max(200).optional(),
+    competitorPageAudits: z.array(z.unknown()).max(5).optional(),
+    competitorPageUrls: z.array(z.string()).max(50).optional(),
     userRobots: z.record(z.string(), z.unknown()).optional(),
     userLlmsTxt: z.record(z.string(), z.unknown()).optional(),
-    competitorRobots: z.array(z.unknown()).optional(),
-    competitorLlmsTxt: z.array(z.unknown()).optional(),
+    competitorRobots: z.array(z.unknown()).max(5).optional(),
+    competitorLlmsTxt: z.array(z.unknown()).max(5).optional(),
     fetchProtocol: z.boolean().optional(),
     userCrawl: z.record(z.string(), z.unknown()).optional(),
-    competitorCrawls: z.array(z.unknown()).optional(),
+    competitorCrawls: z.array(z.unknown()).max(5).optional(),
   }).passthrough(),
   analyze_schema: schemaDraftOrAnalysisSchema,
   generate_schema_draft: schemaDraftOrAnalysisSchema,
   check_web_vitals: z.object({
-    urls: z.array(z.string()).optional(),
-    origins: z.array(z.string()).optional(),
+    urls: z.array(z.string()).max(50).optional(),
+    origins: z.array(z.string()).max(50).optional(),
     formFactor: z.enum(["DESKTOP", "PHONE", "TABLET"]).optional(),
-    concurrency: z.union([z.number(), z.string()]).optional(),
     minIntervalMs: z.union([z.number(), z.string()]).optional(),
   }).passthrough().refine(
     (data) => Boolean((data.urls && data.urls.length > 0) || (data.origins && data.origins.length > 0)),
@@ -857,7 +859,7 @@ const TOOL_SCHEMAS: Record<string, z.ZodTypeAny> = {
       z.object({
         url: z.string().min(1, "缺少 url"),
       }).passthrough()
-    ).min(1, "pages 数组不能为空，且每个元素必须包含 url"),
+    ).min(1, "pages 数组不能为空，且每个元素必须包含 url").max(100),
     sitemapXml: z.string().optional(),
   }).passthrough(),
 };
@@ -872,6 +874,9 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
   if (!parsed.success) {
     throw new Error(`MCP 参数校验失败: ${formatZodIssues(parsed.error.issues)}`);
   }
+  // 使用 zod 解析后的值：.trim()、默认值、类型转换才会真正生效。
+  // 之前只校验 parsed、switch 继续用原始 args，schema 里的变换全是摆设。
+  args = parsed.data as Record<string, unknown>;
   switch (name) {
     case "list_engines":
       return {
@@ -954,9 +959,10 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       const concurrency = Math.max(1, Math.min(5, Number(args.concurrency) || 2));
 
       // T2：竞品清单全程在探测链路中透传，不再靠二次 extract 兜底
-      const reports = await batchProbeVisibility(
+      const batch = await batchProbeVisibilityDetailed(
         brand, queries, concurrency, undefined, competitors
       );
+      const reports = batch.reports;
 
       // 汇总每个 (query, model) 的引用记录；模型响应里没有链接就是 unavailable,不编造
       const records: CitationRecord[] = [];
@@ -986,6 +992,11 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
 
       return {
         totalQueries: queries.length,
+        succeededQueries: reports.length,
+        failedQueries: batch.failures.length,
+        skippedQueries: batch.skipped,
+        // 结构化的失败清单：调用方不能再把“探测失败”当成“没有引用”
+        failures: batch.failures,
         totalRecords: records.length,
         aggregation,
         changes,
@@ -1498,7 +1509,6 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
         urls: urls.length > 0 ? urls : undefined,
         origins: origins.length > 0 ? origins : undefined,
         formFactor,
-        concurrency: typeof args.concurrency === "number" ? args.concurrency : undefined,
         minIntervalMs: typeof args.minIntervalMs === "number" ? args.minIntervalMs : undefined,
       } as const;
 
@@ -1602,6 +1612,11 @@ function errResult(id: JsonRpcId, code: number, message: string, data?: unknown)
 
 /** 处理单条 JSON-RPC 消息。返回 null 表示这是通知（无需响应）。 */
 export async function handleJsonRpc(msg: JsonRpcRequest) {
+  // JSON-RPC 的 body 可以是 null / 数字 / 字符串；这些都不是合法请求对象。
+  // 不挡住的话 `msg.id` 会抛 TypeError，stdio 模式下单个 `null` 就能让进程退出。
+  if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
+    return errResult(null, -32600, "Invalid Request");
+  }
   const id = msg.id ?? null;
   const { method, params } = msg;
 
@@ -1659,12 +1674,18 @@ export async function handleJsonRpcBatch(raw: string): Promise<unknown | null> {
   }
 
   if (Array.isArray(parsed)) {
+    if (parsed.length === 0) {
+      return errResult(null, -32600, "Invalid Request: empty batch");
+    }
     const out = [];
     for (const item of parsed) {
       const r = await handleJsonRpc(item as JsonRpcRequest);
       if (r) out.push(r);
     }
     return out.length ? out : null;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return errResult(null, -32600, "Invalid Request");
   }
   return handleJsonRpc(parsed as JsonRpcRequest);
 }

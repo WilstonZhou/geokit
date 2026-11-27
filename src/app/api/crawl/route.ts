@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { crawlSite, analyzeSiteIssues } from "@/lib/crawler";
 import type { CrawlConfig } from "@/lib/crawler";
+import { BodyTooLargeError, readRequestJson } from "@/lib/api/body";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,15 +18,20 @@ export const maxDuration = 300;
 export async function POST(req: Request) {
   let body: unknown;
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "请求体必须是 JSON" }, { status: 400 });
+    body = await readRequestJson(req);
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof BodyTooLargeError ? e.message : "请求体必须是 JSON" },
+      { status: e instanceof BodyTooLargeError ? 413 : 400 }
+    );
   }
 
-  const { site, config } = (body ?? {}) as {
-    site?: string;
-    config?: Partial<CrawlConfig>;
-  };
+  const raw = (body ?? {}) as Record<string, unknown>;
+  const site = typeof raw.site === "string" ? raw.site : undefined;
+  const config =
+    raw.config && typeof raw.config === "object"
+      ? (raw.config as Partial<CrawlConfig>)
+      : undefined;
   if (!site || !site.trim()) {
     return NextResponse.json(
       { error: "需要提供 site（站点 URL 或域名）" },

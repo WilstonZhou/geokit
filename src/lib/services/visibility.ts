@@ -79,31 +79,63 @@ export function samplingProfile() {
  * 超时 / HTTP 错误」各分支，不必访问任何真实外网（T2 验收要求）。
  * 默认走 runVisibilityMatrix：真实探测，单个 query 失败不影响其他 query。
  */
-export async function batchProbeVisibility(
+export interface VisibilityBatchFailure {
+  /** 原始 query（保持输入顺序定位） */
+  topic: string;
+  /** 在输入 topics 中的下标 */
+  index: number;
+  /** 失败原因（异常 message） */
+  reason: string;
+}
+
+export interface VisibilityBatchResult {
+  /** 成功的报告，按输入顺序 */
+  reports: VisibilityReport[];
+  /** 失败项：调用方可以区分“没请求”与“请求失败” */
+  failures: VisibilityBatchFailure[];
+  /** 空 query 被跳过的数量 */
+  skipped: number;
+}
+
+export async function batchProbeVisibilityDetailed(
   brand: string,
   topics: string[],
   concurrency: number = 2,
   probe?: (brand: string, topic: string) => Promise<VisibilityReport>,
   competitors: string[] = []
-): Promise<VisibilityReport[]> {
-  const reports: VisibilityReport[] = [];
+): Promise<VisibilityBatchResult> {
+  if (!brand.trim()) throw new Error("缺少 brand");
+  // 与 probeVisibility 保持同一契约：空品牌抛错，不要静默返回 [] 假装成功
+
+  const safeTopics = topics.slice(0, 100);
+  const reports = new Array<VisibilityReport | undefined>(safeTopics.length);
+  const failures: VisibilityBatchFailure[] = [];
+  let skipped = 0;
   const doProbe =
     probe ??
     ((b: string, t: string) => runVisibilityMatrix(b, t, collectProviderKeys(), competitors));
 
-  // A simple async pool for concurrency limit
+  // 并发数必须是 1..5 的整数：Array(2.5) 会直接抛 RangeError
+  const workerCount = Math.min(5, Math.max(1, Math.trunc(concurrency) || 2));
+
   const runTasks = async () => {
     let i = 0;
-    const workers = Array(Math.max(1, concurrency)).fill(null).map(async () => {
-      while (i < topics.length) {
+    const workers = Array(workerCount).fill(null).map(async () => {
+      while (i < safeTopics.length) {
         const idx = i++;
-        const t = topics[idx];
-        if (!brand.trim() || !t.trim()) continue;
+        const t = safeTopics[idx];
+        if (!t || !t.trim()) {
+          skipped++;
+          continue;
+        }
         try {
-          const report = await doProbe(brand, t);
-          reports.push(report);
+          reports[idx] = await doProbe(brand, t);
         } catch (e) {
-          console.error("Failed to probe visibility for " + t, e);
+          failures.push({
+            topic: t,
+            index: idx,
+            reason: e instanceof Error ? e.message : String(e),
+          });
         }
       }
     });
@@ -111,5 +143,27 @@ export async function batchProbeVisibility(
   };
 
   await runTasks();
-  return reports;
+  return {
+    reports: reports.filter((r): r is VisibilityReport => r !== undefined),
+    failures: failures.sort((a, b) => a.index - b.index),
+    skipped,
+  };
+}
+
+/** 兼容旧调用方：只返回成功报告 */
+export async function batchProbeVisibility(
+  brand: string,
+  topics: string[],
+  concurrency: number = 2,
+  probe?: (brand: string, topic: string) => Promise<VisibilityReport>,
+  competitors: string[] = []
+): Promise<VisibilityReport[]> {
+  const result = await batchProbeVisibilityDetailed(
+    brand,
+    topics,
+    concurrency,
+    probe,
+    competitors
+  );
+  return result.reports;
 }

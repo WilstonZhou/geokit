@@ -71,7 +71,20 @@ function writeLine(payload: string): Promise<void> {
 async function dispatch(line: string): Promise<void> {
   inFlight++;
   try {
-    const result = await handleJsonRpcBatch(line);
+    let result: unknown;
+    try {
+      result = await handleJsonRpcBatch(line);
+    } catch (e) {
+      // 单行坏输入不能打死整个 MCP 进程：回一条 JSON-RPC internal error
+      result = {
+        jsonrpc: "2.0",
+        id: null,
+        error: {
+          code: -32603,
+          message: e instanceof Error ? e.message : "Internal error",
+        },
+      };
+    }
     if (result === null) return;
     const payloads = Array.isArray(result) ? result : [result];
     for (const p of payloads) {

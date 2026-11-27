@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { searchRankings } from "@/lib/services/serp";
 import { CN_ENGINES, GLOBAL_ENGINES, ENGINE_LIST, isCnEngine, type EngineId } from "@/lib/engines";
+import { BodyTooLargeError, readRequestJson } from "@/lib/api/body";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,18 +16,24 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   let body: unknown;
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "请求体必须是 JSON" }, { status: 400 });
+    body = await readRequestJson(req);
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof BodyTooLargeError ? e.message : "请求体必须是 JSON" },
+      { status: e instanceof BodyTooLargeError ? 413 : 400 }
+    );
   }
 
-  const { keyword, targetDomain, engines, group = "cn", pages = 1 } = (body ?? {}) as {
-    keyword?: string;
-    targetDomain?: string;
-    engines?: EngineId[];
-    group?: "cn" | "global" | "all";
-    pages?: number;
-  };
+  const raw = (body ?? {}) as Record<string, unknown>;
+  const keyword = typeof raw.keyword === "string" ? raw.keyword : undefined;
+  const targetDomain =
+    typeof raw.targetDomain === "string" ? raw.targetDomain : undefined;
+  const engines = Array.isArray(raw.engines) ? (raw.engines as EngineId[]) : undefined;
+  const group =
+    raw.group === "cn" || raw.group === "global" || raw.group === "all"
+      ? raw.group
+      : "cn";
+  const pages = typeof raw.pages === "number" ? raw.pages : 1;
 
   if (!keyword || !keyword.trim()) {
     return NextResponse.json({ error: "缺少 keyword" }, { status: 400 });
