@@ -96,18 +96,25 @@ GEOKIT_TARGET_URL: ${{ vars.GEOKIT_TARGET_URL }}
 
 ### 基线怎么跨 run 传
 
-CI runner 每次全新，Store 必空 —— 所以基线只能靠 artifact：
+CI runner 每次全新，Store 必空 —— 所以基线必须跨 run 传递。
+
+`actions/download-artifact` **默认只下载当前 run** 的产物，不能用来取“上一次”
+的基线；必须提供 `run-id` + `github-token`，或改用 `actions/cache`：
 
 ```yaml
-- uses: actions/download-artifact@v4    # 拉取上次 geokit-baseline
-  continue-on-error: true               # 首次运行没有 ⇒ 继续，由 gate 明说「未判定」
+- uses: actions/cache@v4                # 跨 run 恢复上次基线
+  with:
+    path: geokit-baseline
+    key: geokit-baseline-${{ github.ref_name }}-${{ github.run_id }}
+    restore-keys: geokit-baseline-${{ github.ref_name }}-
 - run: npm run cli -- check ... --out=geokit-ci/report.json
   continue-on-error: true               # check 退出码 1 ≠ 流程失败，判定交给 gate
 - run: npm run cli -- gate --base=geokit-baseline/report.json --report=geokit-ci/report.json
-- uses: actions/upload-artifact@v4      # 本次报告 → 下次基线
+- run: mkdir -p geokit-baseline && cp geokit-ci/report.json geokit-baseline/report.json
+  if: success()                         # 只有通过才更新基线，失败报告不能洗白下一次比较
 ```
 
-⚠️ download 目录不能与本次输出目录相同，否则Baseline 会被本次产物覆盖。
+⚠️ 恢复目录不能与本次输出目录相同，否则 Baseline 会被本次产物覆盖。
 
 ### 权限
 

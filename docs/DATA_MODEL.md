@@ -58,10 +58,13 @@ BLOCKED / ERROR / UNOBSERVABLE
 | `GEOKIT_EVIDENCE` | 观测落库总闸（`on`/`off`） | 否 |
 | `GEOKIT_STORE_DRIVER` | 存储驱动（`jsonl`/`sqlite`） | 否 |
 | `GEOKIT_STORE_DIR` | 自定义存档目录 | 否 |
-| `GEOKIT_EVIDENCE_BODY` | 留存响应体（`on`/`off`） | 否 |
+| `GEOKIT_EVIDENCE_DIR` | 存档目录的次级兜底（兼容 Phase 0） | 否 |
+| `GEOKIT_EVIDENCE_BODY` | 留存响应体（`on`/`hash-only`/`off`）；`geo_score`/`rank`/`ai_mention` 等可重放通道在总闸开启时始终留存正文 | 否 |
+| `GEOKIT_RETENTION` | 保留策略覆盖，如 `serpRaw=7,aiRaw=-` | 否 |
 | `GEOKIT_AI_TIMEOUT_MS` | AI 探测超时（默认 30000） | 否 |
-| `GEOKIT_EVIDENCE_TIMEOUT_MS` | 观测落库超时（默认 30000） | 否 |
+| `GEOKIT_ALLOW_PRIVATE_URLS` | 设为 `on` 才允许抓取本机/内网 URL（默认拦截） | 否 |
 | `CRUX_API_KEY` | Chrome UX Report API key | 否 |
+| `PAGESPEED_API_KEY` | PageSpeed Insights key（缺省回退 CRUX_API_KEY） | 否 |
 | `GOOGLE_OAUTH_ACCESS_TOKEN` | GSC OAuth token | 否 |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | GSC 服务账号 JSON | 否 |
 | `GOOGLE_APPLICATION_CREDENTIALS` | GSC 服务账号文件路径 | 否 |

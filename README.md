@@ -94,10 +94,12 @@ open-seo 是个好项目 —— 28 万行代码、自研站点审计爬虫、完
 
 ```bash
 npm install
-npm run dev        # http://localhost:3210
+npm run dev        # http://127.0.0.1:3210
 ```
 
 核心功能不需要任何付费 API —— 装上就能跑。
+
+> **安全边界**：`npm run dev/start` 默认只监听 `127.0.0.1`，API 不提供鉴权 —— 这是本地单用户工具的刻意取舍，**不要直接暴露到公网/局域网**。确需局域网访问时用 `npx next dev -H 0.0.0.0 -p 3210`，并自行在反向代理层加鉴权。抓取器默认拒绝回环/RFC1918/链路本地/云元数据地址，跟随重定向时逐跳校验；审计本机页面需显式设置 `GEOKIT_ALLOW_PRIVATE_URLS=on`。
 
 ## 数据源原则（强制）
 
@@ -221,6 +223,7 @@ OPENAI_API_KEY=      # ChatGPT
 ANTHROPIC_API_KEY=   # Claude
 GEMINI_API_KEY=      # Gemini
 CRUX_API_KEY=        # Chrome UX Report API（可选，T11 性能观测用）
+PAGESPEED_API_KEY=   # PageSpeed Insights 兜底（可选；缺省回退到 CRUX_API_KEY）
 ```
 
 ## 一条原则：抓不到就说抓不到
@@ -252,6 +255,7 @@ GEOkit 遵循两层分离的数据契约：**Evidence（存证）**是原始请�
 - 默认 JSONL，写入 `.evidence/`（已加入 `.gitignore`，不会进 git）；
 - `GEOKIT_STORE_DRIVER=sqlite` 切换为 Node 内置 `node:sqlite`；
 - `GEOKIT_STORE_DIR` 自定义存档目录；`GEOKIT_EVIDENCE_BODY=on` 额外留存响应体（默认 hash-only）。
+  注意：`geo_score` / `rank` / `ai_mention` 等需要重放的观测通道，在 `GEOKIT_EVIDENCE=on` 时会留存正文（否则 Observation 无法产出）；`GEOKIT_EVIDENCE_BODY` 主要约束其余通道。开启前请评估磁盘占用与页面正文的敏感性。
 
 **schema 层强制约束**：`status` 为 `blocked` / `unavailable` / `error` 时 `statusReason`
 必填 —— 「抓不到就要说清为什么」在数据模型层强制执行，缺 reason 的观测写入即被拒绝。
@@ -315,7 +319,7 @@ GEOkit 从单页审计升级为站点级审计的基础。一个有礼貌、有�
 
 ```bash
 # API
-curl -X POST http://localhost:3000/api/crawl \
+curl -X POST http://localhost:3210/api/crawl \
   -H "Content-Type: application/json" \
   -d '{"site":"example.com","config":{"maxPages":50,"maxDepth":2}}'
 
@@ -520,7 +524,7 @@ npx tsx packages/cli/src/bin.ts diff --prev=prev.json --curr=curr.json
 
 ## 测试与工程质量（Google SWE 标准）
 
-全面拥抱 Node.js 22+（engines `>=22.5`，因 `node:sqlite` 静态导入）原生 `node:test` + `node:assert/strict` 测试体系，**保持直接依赖零新增**：
+全面拥抱 Node.js 22.13+（engines `>=22.13`：`node:sqlite` 从该版本起免 `--experimental-sqlite`）原生 `node:test` + `node:assert/strict` 测试体系，**保持直接依赖零新增**：
 
 - **分级测试体系**：
   - **Unit Tests（密封单元测试）**：位于 `tests/unit/`，纯内存、毫秒级、0 网络依赖，覆盖 HTML 容错解析、诊断规则库映射、修复幂等性、时序比对矩阵、GEO 双模型评分与断层跳级惩罚。
@@ -528,7 +532,7 @@ npx tsx packages/cli/src/bin.ts diff --prev=prev.json --curr=curr.json
 - **基线回归门禁**：通过 `scripts/regression.ts` 对离线基线（`tests/baseline/baseline.json`）执行字节级一致性校验，防范算法静默漂移。
 
 ```bash
-npm test                  # 运行全量 125 项标准测试（耗时 < 3 秒）
+npm test                  # 运行全量 518 项标准测试（约 17 秒）
 npm run test:unit         # 纯单元测试
 npm run test:integration  # 集成测试
 npm run typecheck         # TypeScript 全量类型检查

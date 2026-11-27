@@ -32,6 +32,9 @@ jobs:
       - name: Run Test Suite
         run: npm test
 
+      - name: 基线回归（字节级一致）
+        run: npx tsx scripts/regression.ts check
+
       - name: 构建
         run: npm run build
 
@@ -77,15 +80,19 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
-      # 上一次的产物当基线（跨 job/run 传递只能用 artifact）。
-      # 首次运行没有 ⇒ download 会失败，continue-on-error 让它继续，
-      # 后面由 gate 明确说出「未做退化判定」。
-      - name: 拉取上次基线产物
-        uses: actions/download-artifact@v4
+      # 上一次的产物当基线。
+      #
+      # 不能用 actions/download-artifact：它默认只下载**当前 run** 的产物，
+      # 上一次 run 的 artifact 不会自动可见，导致「基线」永远不存在。
+      # cache 支持跨 run，restore-keys 取最近一次匹配的 key。
+      # 首次运行没有缓存 ⇒ 目录为空，由 gate 明确说出「未做退化判定」。
+      - name: 恢复上次基线
+        uses: actions/cache@v4
         with:
-          name: geokit-baseline
           path: geokit-baseline
-        continue-on-error: true
+          key: geokit-baseline-${{ github.base_ref || github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            geokit-baseline-${{ github.base_ref || github.ref_name }}-
 
       - name: 确认目标 URL 是否已配置
         id: target
@@ -133,10 +140,10 @@ jobs:
           # gate 的退出码才是这个 job 的成败；语义全在 gate 内部，这里不复制
           npm run cli -- gate $BASE --report=geokit-ci/report.json --format=markdown
 
-      - name: 存档本次报告作为下次基线
-        if: always() && steps.target.outputs.skip == 'false'
-        uses: actions/upload-artifact@v4
-        with:
-          name: geokit-baseline
-          path: geokit-ci/report.json
-          overwrite: true
+      # 只有 gate 通过才把本次报告更新为下次基线；
+      # 退化/失败的报告不能变成新基线，否则下一次比较会被“洗白”。
+      - name: 更新基线（供下次 run 恢复）
+        if: success() && steps.target.outputs.skip == 'false'
+        run: |
+          mkdir -p geokit-baseline
+          cp geokit-ci/report.json geokit-baseline/report.json
