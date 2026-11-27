@@ -12,9 +12,9 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -70,9 +70,9 @@ jobs:
       security-events: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -87,7 +87,7 @@ jobs:
       # cache 支持跨 run，restore-keys 取最近一次匹配的 key。
       # 首次运行没有缓存 ⇒ 目录为空，由 gate 明确说出「未做退化判定」。
       - name: 恢复上次基线
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: geokit-baseline
           key: geokit-baseline-${{ github.base_ref || github.ref_name }}-${{ github.run_id }}
@@ -121,7 +121,7 @@ jobs:
 
       - name: 上传 SARIF 到 Code Scanning
         if: steps.target.outputs.skip == 'false'
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: geokit-ci/geokit.sarif
           category: geokit
